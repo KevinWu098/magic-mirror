@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { ConnectionDetails } from "@/app/api/connection-details/route";
+import { TranscriptionView } from "@/components/livekit/transcription-view";
 import {
     BarVisualizer,
     DisconnectButton,
@@ -109,7 +110,7 @@ function SimpleVoiceAssistant(props: { onConnectButtonClicked: () => void }) {
                     >
                         <AgentVisualizer />
                         <div className="w-full flex-1">
-                            {/* <TranscriptionView /> */}
+                            <TranscriptionView />
                         </div>
                         <div className="w-full">
                             <ControlBar
