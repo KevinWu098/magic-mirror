@@ -1,99 +1,100 @@
 "use client";
 
-import { useState } from "react";
-import { useTranscription } from "@/hooks/useTranscription";
-import { cn, generateUUID } from "@/lib/utils";
-import { useChat } from "@ai-sdk/react";
-import { toast } from "sonner";
+import { useEffect, useState } from "react";
 
-interface ClientProps {
-    readonly id: string;
-}
+import { useHandTracking } from "../hooks/useHandTracking";
 
-export function Client({ id }: ClientProps) {
-    const [currentPhrase, setCurrentPhrase] = useState<string>("");
+const CAROUSEL_ITEMS = [
+    { id: 1, color: "red" },
+    { id: 2, color: "blue" },
+    { id: 3, color: "green" },
+    { id: 4, color: "yellow" },
+    { id: 5, color: "pink" },
+];
 
-    const {
-        messages,
-        setMessages,
-        handleSubmit,
-        input,
-        setInput,
-        append,
-        status,
-        stop,
-        reload,
-        error,
-    } = useChat({
-        id,
-        body: { id },
-        experimental_throttle: 100,
-        sendExtraMessageFields: true,
-        generateId: generateUUID,
-        api: "/api/chat",
-        onError: (error) => {
-            console.error("Error in chat:", error);
-            toast.error("An error occurred: " + error?.message);
-        },
-        onFinish: async (message) => {
-            console.log("onFinish", message);
-        },
-    });
+export function Client() {
+    const { videoRef, canvasRef, isGrabbing, swipeDirection } =
+        useHandTracking();
+    const [selectedIndex, setSelectedIndex] = useState(
+        CAROUSEL_ITEMS.length - 1
+    ); // Start with pink selected
 
-    const { isListening, toggleListening } = useTranscription({
-        onTranscript: (transcript, isFinal) => {
-            if (isFinal) {
-                append({
-                    id: generateUUID(),
-                    content: transcript,
-                    role: "user",
-                });
-                setCurrentPhrase("");
-            } else {
-                setCurrentPhrase(transcript);
-                stop();
-            }
-        },
-    });
+    useEffect(() => {
+        if (swipeDirection === "right") {
+            setSelectedIndex((prev) =>
+                prev === 0 ? CAROUSEL_ITEMS.length - 1 : prev - 1
+            );
+        } else if (swipeDirection === "left") {
+            setSelectedIndex((prev) =>
+                prev === CAROUSEL_ITEMS.length - 1 ? 0 : prev + 1
+            );
+        }
+    }, [swipeDirection]);
+
+    const getItemPosition = (itemIndex: number) => {
+        const diff = itemIndex - selectedIndex;
+        const normalizedDiff =
+            (diff + CAROUSEL_ITEMS.length) % CAROUSEL_ITEMS.length;
+        if (normalizedDiff === 0) return "center";
+        if (
+            normalizedDiff === 1 ||
+            normalizedDiff === -(CAROUSEL_ITEMS.length - 1)
+        )
+            return "right";
+        if (
+            normalizedDiff === -1 ||
+            normalizedDiff === CAROUSEL_ITEMS.length - 1
+        )
+            return "left";
+        return "hidden";
+    };
 
     return (
-        <div className="flex min-h-screen flex-col items-center justify-center">
-            <h1 className="mb-8 text-3xl font-bold">
-                Magic Mirror Transcription
-            </h1>
+        <div className="relative h-full">
+            <video
+                ref={videoRef}
+                className="hidden"
+                playsInline
+            />
+            <canvas
+                ref={canvasRef}
+                className="h-full w-full scale-x-[-1] object-cover"
+            />
 
-            <button
-                onClick={toggleListening}
-                className="rounded-full bg-neutral-900 px-6 py-3 text-white transition-colors hover:bg-neutral-700"
-            >
-                {isListening ? "Stop Listening" : "Start Listening"}
-            </button>
-
-            <div className="mt-8 w-full max-w-2xl rounded-lg bg-neutral-100 p-6">
-                {/* Current phrase being transcribed */}
-                {currentPhrase && (
-                    <p className="font-mono text-lg text-blue-600">
-                        {currentPhrase}
-                    </p>
-                )}
-
-                {/* History of transcribed phrases */}
-                <div className="mt-4 space-y-2">
-                    {messages.map((message) => (
-                        <p
-                            key={message.id}
-                            className={cn(
-                                "font-mono text-lg",
-                                message.role === "assistant"
-                                    ? "text-green-600"
-                                    : "text-neutral-900"
-                            )}
-                        >
-                            {message.content}
-                        </p>
-                    ))}
+            {/* Carousel UI */}
+            <div className="absolute inset-0 flex items-center justify-center">
+                <div className="relative w-full max-w-4xl">
+                    {CAROUSEL_ITEMS.map((item, index) => {
+                        const position = getItemPosition(index);
+                        return (
+                            <div
+                                key={item.id}
+                                className={`absolute top-1/2 left-1/2 h-64 w-64 -translate-y-1/2 rounded-xl transition-all duration-500 ${
+                                    position === "center"
+                                        ? "z-30 -translate-x-1/2 scale-100 opacity-100"
+                                        : position === "left"
+                                          ? "z-20 -translate-x-[calc(50%+18rem)] scale-75 opacity-50"
+                                          : position === "right"
+                                            ? "z-20 -translate-x-[calc(50%-18rem)] scale-75 opacity-50"
+                                            : "-translate-x-1/2 scale-50 opacity-0"
+                                }`}
+                                style={{ backgroundColor: item.color }}
+                            />
+                        );
+                    })}
                 </div>
             </div>
+
+            {isGrabbing && (
+                <div className="absolute top-4 left-4 rounded bg-green-500 px-4 py-2 text-white">
+                    Grabbing
+                </div>
+            )}
+            {(swipeDirection === "left" || swipeDirection === "right") && (
+                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-6xl font-bold text-white">
+                    Swipe {swipeDirection}
+                </div>
+            )}
         </div>
     );
 }
