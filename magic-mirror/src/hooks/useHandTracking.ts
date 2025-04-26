@@ -9,6 +9,8 @@ import {
 // Constants for gesture detection
 const DRAG_THRESHOLD = 30; // Distance threshold for drag detection
 const FINGER_CLOSED_THRESHOLD = 0.04; // Threshold for detecting closed fingers
+const SWIPE_THRESHOLD = 100; // Minimum distance for swipe detection
+const SWIPE_COOLDOWN = 500; // Cooldown period between swipes in milliseconds
 
 export function useHandTracking() {
     const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -16,7 +18,11 @@ export function useHandTracking() {
     const landmarkerRef = useRef<HandLandmarker | null>(null);
 
     const [isGrabbing, setIsGrabbing] = useState(false);
+    const [swipeDirection, setSwipeDirection] = useState<
+        "left" | "right" | null
+    >(null);
     const dragStartPosition = useRef<{ x: number; y: number } | null>(null);
+    const lastSwipeTime = useRef<number>(0);
 
     useEffect(() => {
         init();
@@ -41,7 +47,7 @@ export function useHandTracking() {
                 delegate: "GPU",
             },
             runningMode: "VIDEO",
-            numHands: 2,
+            numHands: 1,
         });
 
         landmarkerRef.current = landmarker;
@@ -107,6 +113,7 @@ export function useHandTracking() {
         if (!results.landmarks || results.landmarks.length === 0) {
             setIsGrabbing(false);
             dragStartPosition.current = null;
+            setSwipeDirection(null);
             return;
         }
 
@@ -144,22 +151,34 @@ export function useHandTracking() {
             const palmY = palmLandmark.y * height;
 
             if (isFist) {
-                if (!isGrabbing) {
+                // Use the ref value directly instead of the state to avoid stale closures
+                if (!dragStartPosition.current) {
                     setIsGrabbing(true);
                     dragStartPosition.current = { x: palmX, y: palmY };
-                } else if (dragStartPosition.current) {
-                    const dragDistance = Math.sqrt(
-                        Math.pow(palmX - dragStartPosition.current.x, 2) +
-                            Math.pow(palmY - dragStartPosition.current.y, 2)
-                    );
+                    setSwipeDirection(null);
+                } else {
+                    const currentTime = Date.now();
+                    const horizontalDistance =
+                        palmX - dragStartPosition.current.x;
+                    const timeSinceLastSwipe =
+                        currentTime - lastSwipeTime.current;
 
-                    if (dragDistance > DRAG_THRESHOLD) {
-                        dragStartPosition.current = { x: palmX, y: palmY };
+                    // Only detect swipes if enough time has passed since the last one
+                    if (
+                        Math.abs(horizontalDistance) > SWIPE_THRESHOLD &&
+                        timeSinceLastSwipe > SWIPE_COOLDOWN
+                    ) {
+                        const newDirection =
+                            horizontalDistance > 0 ? "right" : "left";
+                        setSwipeDirection(newDirection);
+                        lastSwipeTime.current = currentTime;
+                        dragStartPosition.current = { x: palmX, y: palmY }; // Reset start position after swipe
                     }
                 }
             } else {
                 setIsGrabbing(false);
                 dragStartPosition.current = null;
+                setSwipeDirection(null);
             }
         });
     };
@@ -188,5 +207,6 @@ export function useHandTracking() {
         videoRef,
         canvasRef,
         isGrabbing,
+        swipeDirection,
     };
 }
