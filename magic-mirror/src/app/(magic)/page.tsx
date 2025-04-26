@@ -1,5 +1,9 @@
-import { LivekitClient } from "@/components/livekit-client";
+// import { LivekitClient } from "@/components/livekit-client";
+
+import { Client } from "@/components/client";
 
 export default function Page() {
-    return <LivekitClient />;
+    // return <LivekitClient />;
+
+    return <Client />;
 }
