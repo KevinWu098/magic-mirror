@@ -1,8 +1,5 @@
-import { Client } from "@/components/client";
-import { generateUUID } from "@/lib/utils";
+import { LivekitClient } from "@/components/livekit-client";
 
 export default function Page() {
-    const id = generateUUID();
-
-    return <Client id={id} />;
+    return <LivekitClient />;
 }
