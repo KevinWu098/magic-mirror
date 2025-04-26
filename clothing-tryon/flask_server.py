@@ -17,7 +17,7 @@ from transformers import CLIPVisionModelWithProjection
 
 # --- Configuration ---
 MODEL_PATH = "/workspace/FitDiT/local_model_dir"
-DEVICE = "cuda:0"  # Or "cpu"
+DEVICE = "cuda:0"
 OFFLOAD = False
 AGGRESSIVE_OFFLOAD = False
 WITH_FP16 = True
@@ -541,25 +541,14 @@ def preprocess_images():
             f"Time - Preprocessing Step Total: {preprocess_end_time - preprocess_start_time:.2f} seconds"
         )
 
-        # --- Create Zip Archive with results ---
-        zip_start = time.time()
-        zip_buffer = io.BytesIO()
-        with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
-            # Save mask to buffer and add to zip
-            mask_buffer = io.BytesIO()
-            mask_pil.save(mask_buffer, format="PNG")
-            mask_buffer.seek(0)
-            zip_file.writestr("mask.png", mask_buffer.read())
-
-            # Save pose image to buffer and add to zip
-            pose_buffer = io.BytesIO()
-            pose_image_pil.save(pose_buffer, format="JPEG")
-            pose_buffer.seek(0)
-            zip_file.writestr("pose.jpg", pose_buffer.read())
-
-        zip_buffer.seek(0)
-        zip_end = time.time()
-        print(f"Time - Creating Zip Archive: {zip_end - zip_start:.2f} seconds")
+        # --- Encode images to base64 ---
+        encode_start = time.time()
+        mask_base64 = encode_pil_to_base64(mask_pil, format="PNG")
+        pose_base64 = encode_pil_to_base64(pose_image_pil, format="JPEG")
+        encode_end = time.time()
+        print(
+            f"Time - Encoding Images to Base64: {encode_end - encode_start:.2f} seconds"
+        )
 
         request_end_time = time.time()
         print(
@@ -567,12 +556,7 @@ def preprocess_images():
         )
         print("--- /preprocess Request Completed ---")
 
-        return send_file(
-            zip_buffer,
-            mimetype="application/zip",
-            as_attachment=True,
-            download_name="preprocess_output.zip",
-        )
+        return jsonify({"mask_base64": mask_base64, "pose_base64": pose_base64})
 
     except Exception as e:
         print(f"Error during preprocessing: {traceback.format_exc()}")
