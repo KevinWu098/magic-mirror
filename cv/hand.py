@@ -7,7 +7,7 @@ import time
 
 # Constants for gesture detection
 DRAG_THRESHOLD = 30      # Distance threshold for drag detection
-FINGER_CLOSED_THRESHOLD = 0.2  # Threshold for detecting closed fingers (for fist detection)
+FINGER_CLOSED_THRESHOLD = 0.7  # Threshold for detecting closed fingers (for fist detection)
 
 # Initialize webcam
 cap = cv2.VideoCapture(0)
@@ -108,7 +108,7 @@ with mp_hands.Hands(
                                 drag_start_position = palm_px
                     # Visualize grabbing
                     cv2.circle(image, palm_px, 20, (0, 255, 0), -1)
-                    cv2.putText(image, "GRAB", (palm_px[0] - 40, palm_px[1] - 20), 
+                    cv2.putText(image, "GRAB", (palm_px[0] - 40, palm_px[1] - 20),
                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
                 else:
                     is_grabbing = False
