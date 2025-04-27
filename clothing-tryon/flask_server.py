@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, url_for
 from flask_cors import CORS
 import os
 import io
@@ -16,6 +16,9 @@ import concurrent.futures
 from transformers import CLIPVisionModelWithProjection
 from ultralytics import FastSAM, YOLO
 import cv2
+import uuid
+import requests
+from dotenv import load_dotenv
 
 # --- Configuration ---
 MODEL_PATH = "/workspace/FitDiT/local_model_dir"
@@ -24,10 +27,33 @@ OFFLOAD = False
 AGGRESSIVE_OFFLOAD = False
 WITH_FP16 = True
 
+# Load environment variables from 'env' file
+load_dotenv(dotenv_path="env")
+
+# Get Zyla API key from environment variables
+zyla_api_key = os.getenv("ZYLA_GOOGLE_LENS_API_KEY")
+if not zyla_api_key:
+    print(
+        "Warning: ZYLA_GOOGLE_LENS_API_KEY not found in env file. /search-lens endpoint will likely fail."
+    )
+    # Optionally raise an error if the key is critical for server startup
+    # raise ValueError("API key not found. Make sure ZYLA_GOOGLE_LENS_API_KEY is set in env file")
+
+# Get Public Base URL for constructing accessible image URLs
+public_base_url = os.getenv("PUBLIC_BASE_URL")
+if not public_base_url:
+    print(
+        "Warning: PUBLIC_BASE_URL not found in env file. /search-lens endpoint will fail if requires external access."
+    )
+    # You might want to raise an error here if this URL is absolutely required:
+    # raise ValueError("PUBLIC_BASE_URL must be set in env file for /search-lens to function correctly.")
+
 try:
     current_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(current_dir)
+    # server_dir = os.path.join(project_root, "server") # No longer needed
     sys.path.insert(0, project_root)
+    # sys.path.insert(0, server_dir) # No longer needed
 
     # Import necessary components directly
     from preprocess.humanparsing.run_parsing import Parsing
@@ -42,7 +68,11 @@ try:
         SD3Transformer2DModel as SD3Transformer2DModel_Vton,
     )
 
+    # Import the Zyla Google Lens function - REMOVED
+    # from zyla_google_lens import search_google_lens
+
 except ImportError as e:
+    # print(f"Error importing FitDiT or Zyla components: {e}") # Adjusted error message
     print(f"Error importing FitDiT components: {e}")
     # Set components to None so initialization check fails gracefully
     Parsing = None
@@ -53,8 +83,14 @@ except ImportError as e:
     SD3Transformer2DModel_Garm = None
     SD3Transformer2DModel_Vton = None
     CLIPVisionModelWithProjection = None
+    # search_google_lens = None # No longer needed
 
-app = Flask(__name__)
+
+# Define static folder path and ensure it exists
+STATIC_FOLDER = os.path.join(current_dir, "static")
+os.makedirs(STATIC_FOLDER, exist_ok=True)
+
+app = Flask(__name__, static_folder=STATIC_FOLDER)
 CORS(app)
 
 # --- Global Storage for Preprocessed Data ---
@@ -641,6 +677,52 @@ def decode_base64_to_pil(base64_string):
     return pil_image
 
 
+# --- Zyla Google Lens API Function (Integrated) ---
+def search_google_lens(image_url):
+    """
+    Search for an image using Google Lens API via Zyla Labs
+
+    Args:
+        image_url (str): URL of the image to search
+
+    Returns:
+        dict: JSON response from the API or None on error
+    """
+    global zyla_api_key  # Access the globally loaded key
+    if not zyla_api_key:
+        print("Error: Zyla API key is not configured.")
+        return None
+
+    # API endpoint
+    endpoint = "https://zylalabs.com/api/1338/google+lens+search+api/1119/search"
+
+    # Request headers
+    headers = {
+        "Authorization": f"Bearer {zyla_api_key}",
+        "Content-Type": "application/json",
+    }
+
+    # Request parameters
+    params = {"url": image_url, "country": "us"}
+
+    try:
+        # Make the request
+        response = requests.get(
+            endpoint, headers=headers, params=params, timeout=30
+        )  # Added timeout
+
+        # Check if the request was successful
+        if response.status_code == 200:
+            return response.json()
+        else:
+            print(f"Zyla API Error: {response.status_code}")
+            print(response.text)
+            return None
+    except requests.exceptions.RequestException as e:
+        print(f"Error during Zyla API request: {e}")
+        return None
+
+
 # --- API Endpoints ---
 
 
@@ -1065,6 +1147,135 @@ def generate_tryon():
         )
         print("--- /generate Request Failed ---")
         return jsonify({"error": f"Internal server error during inference: {e}"}), 500
+
+
+# --- New Endpoint for Google Lens Search ---
+@app.route("/search-lens", methods=["POST"])
+def search_lens_endpoint():
+    print("--- New /search-lens Request ---")
+    request_start_time = time.time()
+
+    if not request.is_json:
+        return jsonify({"error": "Request must be JSON"}), 400
+
+    data = request.get_json()
+    if "image_base64" not in data:
+        return jsonify({"error": "Missing 'image_base64' in JSON payload"}), 400
+
+    # Check if API key was loaded successfully earlier
+    if not zyla_api_key:
+        return (
+            jsonify(
+                {
+                    "error": "Google Lens search function not available due to missing API key."
+                }
+            ),
+            503,
+        )
+
+    # Check if Public Base URL is configured
+    if not public_base_url:
+        return (
+            jsonify({"error": "Server configuration error: PUBLIC_BASE_URL not set."}),
+            500,  # Internal Server Error seems appropriate for config issues
+        )
+
+    image_base64 = data["image_base64"]
+    file_path = None  # Initialize file_path
+
+    try:
+        # 1. Decode Base64 to PIL Image
+        try:
+            # Remove potential data URI prefix (e.g., "data:image/png;base64,")
+            if "," in image_base64:
+                header, encoded = image_base64.split(",", 1)
+            else:
+                encoded = image_base64
+            img_data = base64.b64decode(encoded)
+            pil_image = Image.open(io.BytesIO(img_data))
+            # Ensure image has a standard format like PNG or JPEG for saving
+            img_format = pil_image.format if pil_image.format else "PNG"
+            img_format = img_format.lower()
+            if img_format not in ["png", "jpeg", "jpg"]:
+                print(
+                    f"Warning: Unsupported image format '{img_format}', saving as PNG."
+                )
+                img_format = "png"
+
+        except (base64.binascii.Error, ValueError, IOError) as e:
+            print(f"Error decoding base64 or opening image: {e}")
+            return jsonify({"error": "Invalid base64 string or image data"}), 400
+
+        # 2. Save image to static folder with a unique name
+        filename = f"{uuid.uuid4().hex}.{img_format}"
+        file_path = os.path.join(STATIC_FOLDER, filename)
+        try:
+            pil_image.save(file_path)
+            print(f"  Saved temporary image to: {file_path}")
+        except Exception as e:
+            print(f"Error saving image file: {traceback.format_exc()}")
+            return jsonify({"error": f"Failed to save temporary image: {e}"}), 500
+
+        # 3. Construct the public URL for the image
+        # Use url_for for robustness, requires _external=True for absolute URL
+        try:
+            public_url = f"{public_base_url.rstrip('/')}/static/{filename}"
+
+            print(f"  Generated public URL: {public_url}")
+        except Exception as e:
+            print(f"Error generating public URL: {traceback.format_exc()}")
+            # Clean up saved file before returning error
+            if file_path and os.path.exists(file_path):
+                try:  # Add try-except for cleanup robustness
+                    os.remove(file_path)
+                except OSError as remove_err:
+                    print(
+                        f"Error deleting temporary file during URL generation error: {remove_err}"
+                    )
+            return jsonify({"error": f"Failed to generate image URL: {e}"}), 500
+
+        # 4. Call the Zyla Google Lens API (now uses integrated function)
+        print(f"  Calling search_google_lens with URL: {public_url}")
+        api_call_start = time.time()
+        lens_result = search_google_lens(public_url)
+        api_call_end = time.time()
+        print(f"  Time - Zyla API Call: {api_call_end - api_call_start:.2f} seconds")
+
+        # 5. Return the result from the API
+        request_end_time = time.time()
+        print(
+            f"Time - Total /search-lens Request: {request_end_time - request_start_time:.2f} seconds"
+        )
+
+        if lens_result:
+            print("--- /search-lens Request Completed Successfully ---")
+            return jsonify(lens_result)
+        else:
+            print("--- /search-lens Request Failed (API returned None) ---")
+            # API function already prints errors, return a generic server error
+            return (
+                jsonify(
+                    {"error": "Google Lens API call failed or returned no result."}
+                ),
+                502,
+            )  # 502 Bad Gateway might be appropriate
+
+    except Exception as e:
+        print(f"Unexpected error in /search-lens: {traceback.format_exc()}")
+        request_end_time = time.time()
+        print(
+            f"Time - Total /search-lens Request (Error): {request_end_time - request_start_time:.2f} seconds"
+        )
+        return jsonify({"error": f"Internal server error: {e}"}), 500
+
+    finally:
+        # 6. Clean up: Delete the temporary image file
+        if file_path and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+                print(f"  Cleaned up temporary file: {file_path}")
+            except OSError as e:
+                print(f"Error deleting temporary file {file_path}: {e}")
 
 
 if __name__ == "__main__":
