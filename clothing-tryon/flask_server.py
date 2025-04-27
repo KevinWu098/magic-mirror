@@ -1013,7 +1013,7 @@ def generate_tryon():
                 original_img_base64 = None  # Indicate compositing failed or was skipped
             else:
                 # Mask becomes True for pixels that are NOT close to white
-                mask = np.any(result_np < 245, axis=-1)
+                mask = np.any(result_np < 240, axis=-1)
 
                 # Combine: where mask is True, use result; otherwise use original
                 composite_np = np.where(mask[..., np.newaxis], result_np, original_np)
