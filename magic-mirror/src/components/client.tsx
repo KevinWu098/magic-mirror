@@ -13,6 +13,7 @@ import { Captions } from "@/components/captions";
 import { ClothingDialog } from "@/components/clothing-dialog";
 import { GeneratedClothingDialog } from "@/components/generated-clothing-dialog";
 import { TranscriptionView } from "@/components/livekit/transcription-view";
+import { ProductBubble } from "@/components/product-bubble";
 import { Button } from "@/components/ui/button";
 import {
     Dialog,
@@ -62,6 +63,41 @@ interface ImageItem {
     height: number;
 }
 
+interface SimilarClothingResult {
+    status: string;
+    request_id: string;
+    parameters: {
+        url: string;
+        language: string;
+        country: string;
+    };
+    data: {
+        visual_matches: Array<{
+            position: number;
+            title: string;
+            link: string;
+            source: string;
+            source_icon: string;
+            thumbnail: string;
+            thumbnail_width: number;
+            thumbnail_height: number;
+            image: string;
+            image_width: number;
+            image_height: number;
+            price: string;
+            availability: string;
+        }>;
+    };
+}
+
+interface SimilarClothingItem {
+    imageUrl: string;
+    price: number;
+    name: string;
+    websiteUrl: string;
+    websiteIcon: string;
+}
+
 const SHOULD_CONNECT = true;
 
 export function Client() {
@@ -104,6 +140,12 @@ export function Client() {
             height: 1024,
         },
     ]);
+
+    const [similarClothingItems, setSimilarClothingItems] = useState<
+        SimilarClothingItem[]
+    >([]);
+    const [showSimilarClothingView, setShowSimilarClothingView] =
+        useState(false);
 
     const toggleMute = async () => {
         const newMuteState = !isMuted;
@@ -302,9 +344,29 @@ export function Client() {
                         }
                     );
 
-                const result = await findSimilarClothing(garmentToUse);
+                const result: SimilarClothingResult =
+                    await findSimilarClothing(garmentToUse);
 
                 console.log(result);
+
+                const validProducts = result.data.visual_matches
+                    .filter((e) => e.price && e.availability === "In stock")
+                    .slice(0, 3);
+
+                // Transform the products into our format
+                const transformedProducts: SimilarClothingItem[] =
+                    validProducts.map((product) => ({
+                        imageUrl: product.image,
+                        price: parseFloat(
+                            product.price.replace(/[^0-9.]/g, "")
+                        ),
+                        name: product.title,
+                        websiteUrl: product.link,
+                        websiteIcon: product.source_icon,
+                    }));
+
+                setSimilarClothingItems(transformedProducts);
+                setShowSimilarClothingView(true);
 
                 return "SUCCESS";
             }
@@ -599,6 +661,31 @@ export function Client() {
                     />
 
                     {showClothingOptionsView && <MotionImage images={images} />}
+                    {showSimilarClothingView && (
+                        <div className="absolute bottom-32 grid w-full grid-cols-3 gap-8 px-40">
+                            {similarClothingItems.map((item, index) => (
+                                <motion.div
+                                    key={index}
+                                    initial={{ opacity: 0, y: 50 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    exit={{ opacity: 0, y: 50 }}
+                                    transition={{
+                                        duration: 1,
+                                        delay: index * 0.2,
+                                        ease: [0.32, 0.72, 0, 1],
+                                    }}
+                                >
+                                    <ProductBubble
+                                        imageUrl={item.imageUrl}
+                                        price={item.price}
+                                        name={item.name}
+                                        websiteUrl={item.websiteUrl}
+                                        websiteIcon={item.websiteIcon}
+                                    />
+                                </motion.div>
+                            ))}
+                        </div>
+                    )}
                 </div>
                 <RoomAudioRenderer />
             </RoomContext.Provider>
