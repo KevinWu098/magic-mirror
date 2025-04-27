@@ -13,6 +13,8 @@ import time
 import math
 import base64
 import zipfile
+import threading
+import concurrent.futures
 from transformers import CLIPVisionModelWithProjection
 
 # --- Configuration ---
@@ -53,6 +55,15 @@ except ImportError as e:
     CLIPVisionModelWithProjection = None
 
 app = Flask(__name__)
+
+# --- Global Storage for Preprocessed Data ---
+preprocessed_data = {
+    "vton_img": None,  # PIL Image
+    "Upper-body": {"mask": None, "pose": None},  # PIL Images
+    "Lower-body": {"mask": None, "pose": None},
+    "Dresses": {"mask": None, "pose": None},
+    "lock": threading.Lock(),  # To protect updates/reads
+}
 
 # --- Helper Image Functions (copied from gradio_sd3.py) ---
 
@@ -499,101 +510,139 @@ def decode_base64_to_pil(base64_string):
 @app.route("/preprocess", methods=["POST"])
 def preprocess_images():
     request_start_time = time.time()
-    print("--- New /preprocess Request ---")
+    print("--- New /preprocess Request (Batched Categories) ---")
 
     if generator is None:
         return jsonify({"error": "Model generator not initialized."}), 503
 
-    # --- Input Reading ---
-    if "vton_img" not in request.files:
-        return jsonify({"error": "Missing 'vton_img' file part"}), 400
-    if "category" not in request.form:
-        return jsonify({"error": "Missing 'category' form field"}), 400
+    # --- Input Reading (JSON with base64 vton_img) ---
+    if not request.is_json:
+        return jsonify({"error": "Request must be JSON"}), 400
 
-    vton_file = request.files["vton_img"]
-    if vton_file.filename == "":
-        return jsonify({"error": "No selected file for 'vton_img'"}), 400
+    data = request.get_json()
+    if "vton_img_base64" not in data:
+        return jsonify({"error": "Missing 'vton_img_base64' in JSON payload"}), 400
 
     try:
-        category = request.form["category"]
-        if category not in ["Upper-body", "Lower-body", "Dresses"]:
-            return jsonify({"error": "Invalid category."}), 400
-
-        offset_top = int(request.form.get("offset_top", 0))
-        offset_bottom = int(request.form.get("offset_bottom", 0))
-        offset_left = int(request.form.get("offset_left", 0))
-        offset_right = int(request.form.get("offset_right", 0))
-
-        vton_img_pil = Image.open(vton_file.stream).convert("RGB")
+        # Decode vton image
+        vton_img_pil = decode_base64_to_pil(data["vton_img_base64"]).convert("RGB")
+        # Read optional offsets (can still be useful)
+        offset_top = int(data.get("offset_top", 0))
+        offset_bottom = int(data.get("offset_bottom", 0))
+        offset_left = int(data.get("offset_left", 0))
+        offset_right = int(data.get("offset_right", 0))
 
     except Exception as e:
-        print(f"Error processing input: {traceback.format_exc()}")
-        return jsonify({"error": f"Bad request data: {e}"}), 400
-
-    # --- Preprocessing Step ---
-    preprocess_start_time = time.time()
-    try:
-        mask_pil, pose_image_pil = generator._preprocess_images(
-            vton_img_pil, category, offset_top, offset_bottom, offset_left, offset_right
-        )
-        preprocess_end_time = time.time()
-        print(
-            f"Time - Preprocessing Step Total: {preprocess_end_time - preprocess_start_time:.2f} seconds"
-        )
-
-        # --- Encode images to base64 ---
-        encode_start = time.time()
-        mask_base64 = encode_pil_to_base64(mask_pil, format="PNG")
-        pose_base64 = encode_pil_to_base64(pose_image_pil, format="JPEG")
-        encode_end = time.time()
-        print(
-            f"Time - Encoding Images to Base64: {encode_end - encode_start:.2f} seconds"
-        )
-
-        request_end_time = time.time()
-        print(
-            f"Time - Total /preprocess Request: {request_end_time - request_start_time:.2f} seconds"
-        )
-        print("--- /preprocess Request Completed ---")
-
-        return jsonify({"mask_base64": mask_base64, "pose_base64": pose_base64})
-
-    except Exception as e:
-        print(f"Error during preprocessing: {traceback.format_exc()}")
-        request_end_time = time.time()
-        print(
-            f"Time - Total /preprocess Request (Error): {request_end_time - request_start_time:.2f} seconds"
-        )
-        print("--- /preprocess Request Failed ---")
+        print(f"Error processing input or decoding base64: {traceback.format_exc()}")
         return (
-            jsonify({"error": f"Internal server error during preprocessing: {e}"}),
-            500,
+            jsonify({"error": f"Bad request data or invalid base64 string: {e}"}),
+            400,
         )
+
+    # --- Preprocessing Step (Parallel for 3 categories) ---
+    preprocess_start_time = time.time()
+    categories = ["Upper-body", "Lower-body", "Dresses"]
+    results = {}
+
+    # Helper function to run preprocessing for one category
+    def run_preprocess_for_category(category):
+        try:
+            print(f"  Starting preprocessing for category: {category}")
+            cat_start_time = time.time()
+            mask_pil, pose_image_pil = generator._preprocess_images(
+                vton_img_pil,
+                category,
+                offset_top,
+                offset_bottom,
+                offset_left,
+                offset_right,
+            )
+            cat_end_time = time.time()
+            print(
+                f"  Finished preprocessing for category: {category} in {cat_end_time - cat_start_time:.2f}s"
+            )
+            return category, mask_pil, pose_image_pil
+        except Exception as e:
+            print(f"Error preprocessing category {category}: {traceback.format_exc()}")
+            return category, None, None  # Return None on failure for this category
+
+    # Use ThreadPoolExecutor for potential concurrency
+    # Max workers = 3 since we have 3 categories
+    all_successful = True
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        future_to_category = {
+            executor.submit(run_preprocess_for_category, cat): cat for cat in categories
+        }
+        for future in concurrent.futures.as_completed(future_to_category):
+            category = future_to_category[future]
+            try:
+                cat, mask, pose = future.result()
+                if mask is None or pose is None:
+                    all_successful = False
+                    results[cat] = {
+                        "mask": None,
+                        "pose": None,
+                    }  # Store failure indicator
+                else:
+                    results[cat] = {"mask": mask, "pose": pose}
+            except Exception as exc:
+                print(f"Category {category} generated an exception: {exc}")
+                all_successful = False
+                results[cat] = {"mask": None, "pose": None}  # Store failure indicator
+
+    preprocess_end_time = time.time()
+    print(
+        f"Time - Preprocessing Step Total (All Categories): {preprocess_end_time - preprocess_start_time:.2f} seconds"
+    )
+
+    # --- Update Global Storage ---
+    update_start = time.time()
+    with preprocessed_data["lock"]:
+        preprocessed_data["vton_img"] = vton_img_pil  # Store the new vton image
+        for cat in categories:
+            if cat in results:  # Store result (success or failure)
+                preprocessed_data[cat] = results[cat]
+            else:  # Should not happen with as_completed, but safety check
+                preprocessed_data[cat] = {"mask": None, "pose": None}
+    update_end = time.time()
+    print(f"Time - Updating Global Storage: {update_end - update_start:.2f} seconds")
+
+    request_end_time = time.time()
+    print(
+        f"Time - Total /preprocess Request: {request_end_time - request_start_time:.2f} seconds"
+    )
+
+    if not all_successful:
+        print("--- /preprocess Request Completed with Errors for some categories ---")
+        # Still return 200, but client might want to check /infer response later
+        return jsonify({"status": "preprocessing_completed_with_errors"})
+    else:
+        print("--- /preprocess Request Completed Successfully ---")
+        return jsonify({"status": "preprocessing_complete"})
 
 
 @app.route("/infer", methods=["POST"])
 def infer_tryon():
     request_start_time = time.time()
-    print("--- New /infer Request ---")
+    print("--- New /infer Request (Using Stored Preprocessed Data) ---")
 
     if generator is None:
         return jsonify({"error": "Model generator not initialized."}), 503
 
-    # --- Input Reading (from JSON with base64) ---
+    # --- Input Reading (JSON: garm_img_base64, category, options) ---
     if not request.is_json:
         return jsonify({"error": "Request must be JSON"}), 400
 
     data = request.get_json()
 
-    required_fields = [
-        "garm_img_base64",
-        "vton_img_base64",
-        "mask_base64",
-        "pose_base64",
-    ]
+    required_fields = ["garm_img_base64", "category"]
     for field in required_fields:
         if field not in data:
             return jsonify({"error": f"Missing '{field}' in JSON payload"}), 400
+
+    category = data["category"]
+    if category not in ["Upper-body", "Lower-body", "Dresses"]:
+        return jsonify({"error": "Invalid category."}), 400
 
     try:
         # Read parameters from JSON data
@@ -605,16 +654,8 @@ def infer_tryon():
         if resolution not in ["768x1024", "1152x1536", "1536x2048"]:
             return jsonify({"error": "Invalid resolution."}), 400
 
-        # Decode images from base64 strings
+        # Decode garment image from base64 string
         garm_img_pil = decode_base64_to_pil(data["garm_img_base64"]).convert("RGB")
-        # Decode vton again for original size info
-        vton_img_pil = decode_base64_to_pil(data["vton_img_base64"]).convert("RGB")
-        mask_pil = decode_base64_to_pil(data["mask_base64"]).convert(
-            "L"
-        )  # Ensure L mode for mask
-        pose_image_pil = decode_base64_to_pil(data["pose_base64"]).convert(
-            "RGB"
-        )  # Ensure RGB for pose
 
     except Exception as e:
         print(f"Error processing input or decoding base64: {traceback.format_exc()}")
@@ -623,16 +664,45 @@ def infer_tryon():
             400,
         )
 
-    print(f"Processing /infer request: resolution={resolution}, seed={seed}")
+    # --- Retrieve Preprocessed Data from Global Storage ---
+    retrieval_start = time.time()
+    with preprocessed_data["lock"]:
+        vton_img_pil = preprocessed_data.get("vton_img")
+        category_data = preprocessed_data.get(category)
+        mask_pil = category_data.get("mask") if category_data else None
+        pose_image_pil = category_data.get("pose") if category_data else None
+    retrieval_end = time.time()
+    print(
+        f"Time - Retrieving data from global storage: {retrieval_end - retrieval_start:.2f} seconds"
+    )
+
+    if vton_img_pil is None:
+        return (
+            jsonify({"error": "VTON image not found. Please run /preprocess first."}),
+            400,
+        )
+    if mask_pil is None or pose_image_pil is None:
+        return (
+            jsonify(
+                {
+                    "error": f"Preprocessed mask/pose for category '{category}' not found or preprocessing failed. Please run /preprocess."
+                }
+            ),
+            400,
+        )
+
+    print(
+        f"Processing /infer request: category={category}, resolution={resolution}, seed={seed}"
+    )
 
     # --- Inference Step ---
     inference_start_time = time.time()
     try:
         result_img_pil = generator._run_inference(
-            vton_img_pil,
-            garm_img_pil,
-            mask_pil,
-            pose_image_pil,
+            vton_img_pil,  # From global storage
+            garm_img_pil,  # From request
+            mask_pil,  # From global storage
+            pose_image_pil,  # From global storage
             n_steps,
             image_scale,
             seed,
@@ -669,127 +739,6 @@ def infer_tryon():
             f"Time - Total /infer Request (Error): {request_end_time - request_start_time:.2f} seconds"
         )
         print("--- /infer Request Failed ---")
-        return jsonify({"error": f"Internal server error during inference: {e}"}), 500
-
-
-@app.route("/generate", methods=["POST"])
-def generate_tryon():
-    request_start_time = time.time()
-    print("--- New /generate Request (Combined) ---")
-
-    if generator is None:
-        return jsonify({"error": "Model generator not initialized."}), 503
-
-    # --- Input Reading (from JSON with base64) ---
-    if not request.is_json:
-        return jsonify({"error": "Request must be JSON"}), 400
-
-    data = request.get_json()
-
-    required_fields = ["vton_img_base64", "garm_img_base64", "category"]
-    for field in required_fields:
-        if field not in data:
-            return jsonify({"error": f"Missing '{field}' in JSON payload"}), 400
-
-    try:
-        category = data["category"]
-        if category not in ["Upper-body", "Lower-body", "Dresses"]:
-            return jsonify({"error": "Invalid category."}), 400
-
-        # Read optional parameters from JSON data
-        offset_top = int(data.get("offset_top", 0))
-        offset_bottom = int(data.get("offset_bottom", 0))
-        offset_left = int(data.get("offset_left", 0))
-        offset_right = int(data.get("offset_right", 0))
-        n_steps = int(data.get("n_steps", 20))
-        image_scale = float(data.get("image_scale", 2.0))
-        seed = int(data.get("seed", -1))
-        num_images_per_prompt = 1  # Keep fixed
-        resolution = data.get("resolution", "768x1024")
-        if resolution not in ["768x1024", "1152x1536", "1536x2048"]:
-            return jsonify({"error": "Invalid resolution."}), 400
-
-        # Decode images from base64 strings
-        vton_img_pil = decode_base64_to_pil(data["vton_img_base64"]).convert("RGB")
-        garm_img_pil = decode_base64_to_pil(data["garm_img_base64"]).convert("RGB")
-
-    except Exception as e:
-        print(f"Error processing input or decoding base64: {traceback.format_exc()}")
-        return (
-            jsonify({"error": f"Bad request data or invalid base64 string: {e}"}),
-            400,
-        )
-
-    print(
-        f"Processing /generate request: category={category}, resolution={resolution}, seed={seed}"
-    )
-
-    # --- Step 1: Preprocessing ---
-    preprocess_start_time = time.time()
-    try:
-        mask_pil, pose_image_pil = generator._preprocess_images(
-            vton_img_pil, category, offset_top, offset_bottom, offset_left, offset_right
-        )
-        preprocess_end_time = time.time()
-        print(
-            f"Time - Preprocessing Step Total: {preprocess_end_time - preprocess_start_time:.2f} seconds"
-        )
-    except Exception as e:
-        print(f"Error during preprocessing: {traceback.format_exc()}")
-        request_end_time = time.time()
-        print(
-            f"Time - Total /generate Request (Preproc Error): {request_end_time - request_start_time:.2f} seconds"
-        )
-        print("--- /generate Request Failed ---")
-        return (
-            jsonify({"error": f"Internal server error during preprocessing: {e}"}),
-            500,
-        )
-
-    # --- Step 2: Inference ---
-    inference_start_time = time.time()
-    try:
-        result_img_pil = generator._run_inference(
-            vton_img_pil,
-            garm_img_pil,
-            mask_pil,
-            pose_image_pil,
-            n_steps,
-            image_scale,
-            seed,
-            num_images_per_prompt,
-            resolution,
-        )
-        inference_end_time = time.time()
-        print(
-            f"Time - Inference Step Total: {inference_end_time - inference_start_time:.2f} seconds"
-        )
-
-        if result_img_pil is None:
-            return jsonify({"error": "Model failed to generate an image."}), 500
-
-        # --- Encode result to base64 and send JSON response ---
-        encode_start = time.time()
-        result_base64 = encode_pil_to_base64(result_img_pil, format="PNG")
-        encode_end = time.time()
-        print(
-            f"Time - Encoding Result to Base64: {encode_end - encode_start:.2f} seconds"
-        )
-
-        request_end_time = time.time()
-        print(
-            f"Time - Total /generate Request: {request_end_time - request_start_time:.2f} seconds"
-        )
-        print(f"--- /generate Request Completed ---")
-        return jsonify({"result_image_base64": result_base64})
-
-    except Exception as e:
-        print(f"Error during inference: {traceback.format_exc()}")
-        request_end_time = time.time()
-        print(
-            f"Time - Total /generate Request (Infer Error): {request_end_time - request_start_time:.2f} seconds"
-        )
-        print("--- /generate Request Failed ---")
         return jsonify({"error": f"Internal server error during inference: {e}"}), 500
 
 
