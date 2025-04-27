@@ -14,6 +14,9 @@ from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 load_dotenv()
 
+# Global instances
+agent = None
+session = None
 
 class Assistant(Agent):
     def __init__(self) -> None:
@@ -29,9 +32,10 @@ class Assistant(Agent):
             When you are STOPPED, do not respond with too much text. just affirm and stop.
             """,
         )
+        self.agent = self
 
     @function_tool()
-    async def generate_clothing(
+    async def try_on_clothing(
         self,
         context: RunContext,
         clothing_item: str,
@@ -87,34 +91,8 @@ class Assistant(Agent):
         except Exception:
             raise ToolError("Unable to take calibration image")
 
-    # @function_tool()
-    # async def generate_try_on(
-    #     self,
-    #     context: RunContext,
-    # ) -> dict[str, Any]:
-    #     """Generate an image of the user wearing the garment
-        
-    #     Args:
-    #         None
-    #     """
-
-    #     try:
-    #         room = get_job_context().room
-    #         participant_identity = next(iter(room.remote_participants))
-    #         response = await room.local_participant.perform_rpc(
-    #             destination_identity=participant_identity,
-    #             method="generateTryOn",
-    #             response_timeout=10.0,
-    #             payload=json.dumps({}),
-    #         )
-            
-    #         print(response)
-    #         return f'Tell the user the result of the try on generation: {response}. If error, please ask them to try again.'
-    #     except Exception:
-    #         raise ToolError("Unable to generate try on")
-
     @function_tool()
-    async def generate_clothing(
+    async def try_on_clothing(
         self,
         context: RunContext,
     ) -> dict[str, Any]:
@@ -127,11 +105,46 @@ class Assistant(Agent):
         try:
             room = get_job_context().room
             participant_identity = next(iter(room.remote_participants))
+            
+            global session
+            await session.say("Sure! Creating try-on...")
+            
             response = await room.local_participant.perform_rpc(
                 destination_identity=participant_identity,
-                method="generateClothing",
+                method="tryOnClothing",
                 response_timeout=15.0,
                 payload=json.dumps({}),
+            )
+            
+            print(response)
+            return f'Tell the user the result of the try on generation: {response}. If error, please ask them to try again.'
+        except Exception:
+            raise ToolError("Unable to generate try on")
+
+    @function_tool()
+    async def create_try_on_clothing(
+        self,
+        generationRequest: str,
+        context: RunContext,
+    ) -> dict[str, Any]:
+        """Generate an image of the user wearing the garment they have described. USE THIS TOOL WHEN THEY DESCRIBE THE CLOTHING ITEM.
+        
+        Args:
+            generationRequest: The request for what the clothing generated should be. The image should consist of only the garment on a white background
+        """
+
+        try:
+            room = get_job_context().room
+            participant_identity = next(iter(room.remote_participants))
+            
+            global session
+            await session.say("Sure! Creating creative try-on...")
+            
+            response = await room.local_participant.perform_rpc(
+                destination_identity=participant_identity,
+                method="tryOnCreativeClothing",
+                response_timeout=60.0,
+                payload=json.dumps({"generationRequest": generationRequest}),
             )
             
             print(response)
@@ -168,6 +181,11 @@ class Assistant(Agent):
 
 
 async def entrypoint(ctx: agents.JobContext):
+    global agent
+    global session
+    
+    agent = Assistant()
+    
     await ctx.connect()
 
     session = AgentSession(
@@ -180,7 +198,7 @@ async def entrypoint(ctx: agents.JobContext):
 
     await session.start(
         room=ctx.room,
-        agent=Assistant(),
+        agent=agent,
         room_input_options=RoomInputOptions(
             noise_cancellation=noise_cancellation.BVC(),
         ),
