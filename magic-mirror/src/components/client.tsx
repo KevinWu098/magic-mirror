@@ -128,6 +128,7 @@ export function Client() {
 
     const [garment, setGarment] = useState<File | null>(null);
 
+    const [foobar, setFoobar] = useState<File[]>([]);
     const [images, setImages] = useState<ImageItem[]>([
         {
             src: "/dev/bunny.jpg",
@@ -232,6 +233,7 @@ export function Client() {
                     });
 
                     setGarment(garmentFile);
+                    setFoobar([garmentFile]);
 
                     const { maskedImage, overlaidImage, originalImage } =
                         await generateClothing(garmentFile, bodyPart, vtonFile);
@@ -311,6 +313,7 @@ export function Client() {
                     });
 
                     setGarment(garmentFile);
+                    setFoobar([garmentFile]);
 
                     const { maskedImage, overlaidImage, originalImage } =
                         await generateClothing(garmentFile, bodyPart, vtonFile);
@@ -387,10 +390,14 @@ export function Client() {
             "findSimilarClothing",
             async (data: RpcInvocationData) => {
                 console.log("GARMENT", garment);
+                console.log("GARMENT", foobar);
 
                 setLoading(true);
+                setShowSearchOptionsView(false);
+                setShowClothingOptionsView(false);
 
                 const garmentToUse =
+                    foobar[0] ||
                     garment ||
                     new File(
                         [await fetch(images[0]!.src).then((r) => r.blob())],
@@ -427,6 +434,8 @@ export function Client() {
 
                 setSimilarClothingItems(transformedProducts);
                 setShowSearchOptionsView(true);
+                setShowModal(false);
+                setShowGeneratedModal(false);
 
                 setLoading(false);
 
