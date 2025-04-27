@@ -744,6 +744,136 @@ def infer_tryon():
         return jsonify({"error": f"Internal server error during inference: {e}"}), 500
 
 
+@app.route("/generate", methods=["POST"])
+def generate_tryon():
+    request_start_time = time.time()
+    print("--- New /generate Request (Combined Preprocess & Infer) ---")
+
+    if generator is None:
+        return jsonify({"error": "Model generator not initialized."}), 503
+
+    # --- Input Reading (JSON: vton_img, garm_img, category, options) ---
+    if not request.is_json:
+        return jsonify({"error": "Request must be JSON"}), 400
+
+    data = request.get_json()
+
+    required_fields = ["vton_img_base64", "garm_img_base64", "category"]
+    for field in required_fields:
+        if field not in data:
+            return jsonify({"error": f"Missing '{field}' in JSON payload"}), 400
+
+    category = data["category"]
+    if category not in ["Upper-body", "Lower-body", "Dresses"]:
+        return jsonify({"error": "Invalid category."}), 400
+
+    try:
+        # Decode images
+        vton_img_pil = decode_base64_to_pil(data["vton_img_base64"]).convert("RGB")
+        garm_img_pil = decode_base64_to_pil(data["garm_img_base64"]).convert("RGB")
+
+        # Read optional preprocessing offsets (though less critical here)
+        offset_top = int(data.get("offset_top", 0))
+        offset_bottom = int(data.get("offset_bottom", 0))
+        offset_left = int(data.get("offset_left", 0))
+        offset_right = int(data.get("offset_right", 0))
+
+        # Read inference parameters
+        n_steps = int(data.get("n_steps", 20))
+        image_scale = float(data.get("image_scale", 2.0))
+        seed = int(data.get("seed", -1))
+        num_images_per_prompt = 1  # Keep fixed for simplicity
+        resolution = data.get("resolution", "768x1024")
+        if resolution not in ["768x1024", "1152x1536", "1536x2048"]:
+            return jsonify({"error": "Invalid resolution."}), 400
+
+    except Exception as e:
+        print(f"Error processing input or decoding base64: {traceback.format_exc()}")
+        return (
+            jsonify({"error": f"Bad request data or invalid base64 string: {e}"}),
+            400,
+        )
+
+    print(
+        f"Processing /generate request: category={category}, resolution={resolution}, seed={seed}"
+    )
+
+    # --- Step 1: Preprocessing ---
+    preprocess_start_time = time.time()
+    try:
+        print(f"  Starting preprocessing for category: {category}")
+        mask_pil, pose_image_pil = generator._preprocess_images(
+            vton_img_pil,
+            category,
+            offset_top,
+            offset_bottom,
+            offset_left,
+            offset_right,
+        )
+        preprocess_end_time = time.time()
+        if mask_pil is None or pose_image_pil is None:
+            print(f"  Preprocessing failed for category: {category}")
+            return (
+                jsonify({"error": f"Preprocessing failed for category '{category}'."}),
+                500,
+            )
+        print(
+            f"  Finished preprocessing in {preprocess_end_time - preprocess_start_time:.2f}s"
+        )
+    except Exception as e:
+        print(f"Error during preprocessing: {traceback.format_exc()}")
+        return (
+            jsonify({"error": f"Internal server error during preprocessing: {e}"}),
+            500,
+        )
+
+    # --- Step 2: Inference ---
+    inference_start_time = time.time()
+    try:
+        result_img_pil = generator._run_inference(
+            vton_img_pil,
+            garm_img_pil,
+            mask_pil,
+            pose_image_pil,
+            n_steps,
+            image_scale,
+            seed,
+            num_images_per_prompt,
+            resolution,
+        )
+        inference_end_time = time.time()
+        print(
+            f"  Time - Inference Step Total: {inference_end_time - inference_start_time:.2f} seconds"
+        )
+
+        if result_img_pil is None:
+            return jsonify({"error": "Model failed to generate an image."}), 500
+
+        # --- Step 3: Encode result to base64 and send JSON response ---
+        encode_start = time.time()
+        result_base64 = encode_pil_to_base64(result_img_pil, format="PNG")
+        encode_end = time.time()
+        print(
+            f"  Time - Encoding Result to Base64: {encode_end - encode_start:.2f} seconds"
+        )
+
+        request_end_time = time.time()
+        print(
+            f"Time - Total /generate Request: {request_end_time - request_start_time:.2f} seconds"
+        )
+        print("--- /generate Request Completed ---")
+        return jsonify({"result_image_base64": result_base64})
+
+    except Exception as e:
+        print(f"Error during inference: {traceback.format_exc()}")
+        request_end_time = time.time()
+        print(
+            f"Time - Total /generate Request (Error): {request_end_time - request_start_time:.2f} seconds"
+        )
+        print("--- /generate Request Failed ---")
+        return jsonify({"error": f"Internal server error during inference: {e}"}), 500
+
+
 if __name__ == "__main__":
     if generator is None:
         print("Failed to initialize model generator. Flask server cannot start.")
