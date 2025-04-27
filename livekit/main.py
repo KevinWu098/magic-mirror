@@ -96,7 +96,7 @@ class Assistant(Agent):
         self,
         context: RunContext,
     ) -> dict[str, Any]:
-        """Generate an image of the user wearing the garment
+        """Generate an image of the user wearing the garment. THIS TOOL SHOULD BE USED WHEN THE REFERENCED GARMENT IS "DEFAULT". THIS INCLUDES THE BLUE T SHIRT.
         
         Args:
             None
@@ -130,7 +130,7 @@ class Assistant(Agent):
         """Generate an image of the user wearing the garment they have described. USE THIS TOOL WHEN THEY DESCRIBE THE CLOTHING ITEM.
         
         Args:
-            generationRequest: The request for what the clothing generated should be. The image should consist of only the garment on a white background
+            generationRequest: The request for what the clothing generated should be. The image should consist of only the garment on a white background. ALWAYS ALWAYS SPECIFY IN THE REQUEST THAT THE BACKGROUND SHOULD BE COMPLETELY WHITE. ALSO SPECIFY THAT YOU SHOULD ONLY GENERATE THE CLOTHING ITEM WITHOUT A MODEL WEARING THE CLOTHING.
         """
 
         try:

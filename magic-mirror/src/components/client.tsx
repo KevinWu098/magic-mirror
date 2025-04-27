@@ -158,6 +158,8 @@ export function Client() {
                 try {
                     const payload = JSON.parse(data.payload);
                     const generationRequest = payload.generationRequest;
+                    setGeneratedImage1(null);
+                    setGeneratedImage2(null);
 
                     const vtonBlob =
                         await captureAndProcessVideoFrame(videoRef);
