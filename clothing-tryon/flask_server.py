@@ -911,6 +911,10 @@ def generate_tryon():
         vton_img_pil = generator._segment_person(vton_img_pil_orig)
         # --- End Segmentation Step ---
 
+        # +++ Encode original VTON image +++
+        original_vton_base64 = encode_pil_to_base64(vton_img_pil_orig, format="PNG")
+        # +++ End Encode original VTON image +++
+
         # Read optional preprocessing offsets (though less critical here)
         offset_top = int(data.get("offset_top", 0))
         offset_bottom = int(data.get("offset_bottom", 0))
@@ -990,10 +994,48 @@ def generate_tryon():
 
         # --- Step 3: Encode result to base64 and send JSON response ---
         encode_start = time.time()
-        result_base64 = encode_pil_to_base64(result_img_pil, format="PNG")
+        masked_img_base64 = encode_pil_to_base64(result_img_pil, format="PNG")
+
+        # --- Step 4: Composite result onto original background ---
+        composite_start = time.time()
+        overlaid_img_base64 = None  # Initialize variable for composited image
+        try:
+            # Ensure images are RGB for NumPy processing
+            result_np = np.array(result_img_pil.convert("RGB"))
+            original_np = np.array(vton_img_pil_orig.convert("RGB"))
+
+            # Check dimensions match (should match due to unpad_and_resize)
+            if result_np.shape != original_np.shape:
+                print(
+                    f"Warning: Dimension mismatch between result ({result_np.shape}) and original ({original_np.shape}). Skipping compositing."
+                )
+                # Handle mismatch: perhaps return only the segmented result or an error/flag
+                original_img_base64 = None  # Indicate compositing failed or was skipped
+            else:
+                # Mask becomes True for pixels that are NOT close to white
+                mask = np.any(result_np < 245, axis=-1)
+
+                # Combine: where mask is True, use result; otherwise use original
+                composite_np = np.where(mask[..., np.newaxis], result_np, original_np)
+
+                # Convert back to PIL Image
+                composite_img_pil = Image.fromarray(composite_np.astype(np.uint8))
+                overlaid_img_base64 = encode_pil_to_base64(
+                    composite_img_pil, format="PNG"
+                )
+
+        except Exception as composite_exc:
+            print(f"Error during compositing: {traceback.format_exc()}")
+            overlaid_img_base64 = None  # Indicate compositing failed
+
+        composite_end = time.time()
+        print(
+            f"  Time - Compositing onto Original: {composite_end - composite_start:.2f} seconds"
+        )
+
         encode_end = time.time()
         print(
-            f"  Time - Encoding Result to Base64: {encode_end - encode_start:.2f} seconds"
+            f"  Time - Encoding Results to Base64: {encode_end - encode_start:.2f} seconds"
         )
 
         request_end_time = time.time()
@@ -1001,7 +1043,19 @@ def generate_tryon():
             f"Time - Total /generate Request: {request_end_time - request_start_time:.2f} seconds"
         )
         print("--- /generate Request Completed ---")
-        return jsonify({"result_image_base64": result_base64})
+        # Return all three images
+        response_data = {
+            "masked_img_base64": masked_img_base64,
+            "original_img_base64": original_vton_base64,  # Add the original VTON
+        }
+        if overlaid_img_base64:
+            response_data["overlaid_img_base64"] = overlaid_img_base64
+        else:
+            response_data["compositing_status"] = (
+                "failed_or_skipped"  # Optional: signal issues
+            )
+
+        return jsonify(response_data)
 
     except Exception as e:
         print(f"Error during inference: {traceback.format_exc()}")
