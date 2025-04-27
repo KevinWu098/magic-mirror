@@ -18,6 +18,7 @@ import {
     DialogTitle,
     DialogTrigger,
 } from "@/components/ui/dialog";
+import { MotionImage } from "@/components/ui/motion-image";
 import { useHandTracking } from "@/hooks/useHandTracking";
 import { onDeviceFailure } from "@/lib/livekit";
 import {
@@ -48,6 +49,8 @@ export function Client() {
     const [tryOnResult, setTryOnResult] = useState<string | null>(null);
     const [showModal, setShowModal] = useState(false);
     const [isMuted, setIsMuted] = useState(false);
+    const [showClothingOptionsView, setShowClothingOptionsView] =
+        useState(false);
 
     // New state for captions
     const [messages, setMessages] = useState<Message[]>([]);
@@ -224,7 +227,7 @@ export function Client() {
                         type: "image/jpeg",
                     });
 
-                    const response = await fetch("/dev/garment.jpg");
+                    const response = await fetch("/dev/bunny.jpg");
                     const blob = await response.blob();
 
                     // Create File object from blob
@@ -234,7 +237,7 @@ export function Client() {
 
                     const { result } = await generateClothing(
                         garmentFile,
-                        "Dresses",
+                        "Upper-body",
                         vtonFile
                     );
                     console.log(result.toString());
@@ -248,6 +251,17 @@ export function Client() {
                 } catch (error) {
                     throw new RpcError(1, "Failed to capture video frame");
                 }
+            }
+        );
+
+        localParticipant.registerRpcMethod(
+            "showClothingOptions",
+            async (data: RpcInvocationData) => {
+                const payload = JSON.parse(data.payload);
+
+                setShowClothingOptionsView(payload.show);
+
+                return "SUCCESS";
             }
         );
 
@@ -296,7 +310,7 @@ export function Client() {
                         {isMuted ? "Muted" : "Unmuted"}
                     </div>
 
-                    <div className="absolute top-4 left-4 -translate-x-1/2">
+                    <div className="absolute top-8 left-8 -translate-x-1/2">
                         <Button
                             variant="ghost"
                             size="icon"
@@ -316,6 +330,31 @@ export function Client() {
                         messages={messages}
                         userIsFinal={userIsFinal}
                     />
+
+                    {showClothingOptionsView && (
+                        <MotionImage
+                            images={[
+                                {
+                                    src: "/dev/bunny.jpg",
+                                    alt: "Bunny",
+                                    width: 1024,
+                                    height: 1024,
+                                },
+                                {
+                                    src: "/dev/kevin.jpg",
+                                    alt: "Kevin",
+                                    width: 1024,
+                                    height: 1024,
+                                },
+                                {
+                                    src: "/dev/garment.jpg",
+                                    alt: "Dress",
+                                    width: 1024,
+                                    height: 1024,
+                                },
+                            ]}
+                        />
+                    )}
                 </div>
                 <RoomAudioRenderer />
             </RoomContext.Provider>
