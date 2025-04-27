@@ -1,99 +1,105 @@
 "use client";
 
-import { useState } from "react";
-import { useTranscription } from "@/hooks/useTranscription";
-import { cn, generateUUID } from "@/lib/utils";
-import { useChat } from "@ai-sdk/react";
-import { toast } from "sonner";
+import { useEffect, useState } from "react";
+import { takeCalibrationImage } from "@/actions";
+import { ConnectionDetails } from "@/app/api/connection-details/route";
+import { TranscriptionView } from "@/components/livekit/transcription-view";
+import { useHandTracking } from "@/hooks/useHandTracking";
+import { onDeviceFailure } from "@/lib/livekit";
+import {
+    ControlBar,
+    RoomAudioRenderer,
+    RoomContext,
+} from "@livekit/components-react";
+import { Room, RoomEvent, RpcError, RpcInvocationData } from "livekit-client";
 
-interface ClientProps {
-    readonly id: string;
-}
+export function Client() {
+    const { videoRef, canvasRef, isGrabbing, swipeDirection } =
+        useHandTracking();
 
-export function Client({ id }: ClientProps) {
-    const [currentPhrase, setCurrentPhrase] = useState<string>("");
+    const [room] = useState(new Room());
 
-    const {
-        messages,
-        setMessages,
-        handleSubmit,
-        input,
-        setInput,
-        append,
-        status,
-        stop,
-        reload,
-        error,
-    } = useChat({
-        id,
-        body: { id },
-        experimental_throttle: 100,
-        sendExtraMessageFields: true,
-        generateId: generateUUID,
-        api: "/api/chat",
-        onError: (error) => {
-            console.error("Error in chat:", error);
-            toast.error("An error occurred: " + error?.message);
-        },
-        onFinish: async (message) => {
-            console.log("onFinish", message);
-        },
-    });
+    useEffect(() => {
+        async function connect() {
+            const url = new URL(
+                process.env.NEXT_PUBLIC_CONN_DETAILS_ENDPOINT ??
+                    "/api/connection-details",
+                window.location.origin
+            );
+            const response = await fetch(url.toString());
+            const connectionDetailsData: ConnectionDetails =
+                await response.json();
 
-    const { isListening, toggleListening } = useTranscription({
-        onTranscript: (transcript, isFinal) => {
-            if (isFinal) {
-                append({
-                    id: generateUUID(),
-                    content: transcript,
-                    role: "user",
-                });
-                setCurrentPhrase("");
-            } else {
-                setCurrentPhrase(transcript);
-                stop();
+            await room.connect(
+                connectionDetailsData.serverUrl,
+                connectionDetailsData.participantToken
+            );
+            await room.localParticipant.setMicrophoneEnabled(true);
+        }
+
+        connect();
+
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    useEffect(() => {
+        room.on(RoomEvent.MediaDevicesError, onDeviceFailure);
+
+        return () => {
+            room.off(RoomEvent.MediaDevicesError, onDeviceFailure);
+        };
+    }, [room]);
+
+    const localParticipant = room.localParticipant;
+
+    localParticipant.registerRpcMethod(
+        "takeCalibrationImage",
+        async (data: RpcInvocationData) => {
+            try {
+                if (!videoRef.current) {
+                    throw new RpcError(1, "Video element not found");
+                }
+
+                const canvas = document.createElement("canvas");
+                canvas.width = videoRef.current.videoWidth;
+                canvas.height = videoRef.current.videoHeight;
+
+                const ctx = canvas.getContext("2d");
+                if (!ctx) {
+                    throw new RpcError(1, "Could not create canvas context");
+                }
+                const response = canvas.toDataURL("image/jpeg", 0.5);
+
+                const { success } = await takeCalibrationImage(response);
+
+                return success.toString();
+            } catch (error) {
+                throw new RpcError(1, "Failed to capture video frame");
             }
-        },
-    });
+        }
+    );
 
     return (
-        <div className="flex min-h-screen flex-col items-center justify-center">
-            <h1 className="mb-8 text-3xl font-bold">
-                Magic Mirror Transcription
-            </h1>
-
-            <button
-                onClick={toggleListening}
-                className="rounded-full bg-neutral-900 px-6 py-3 text-white transition-colors hover:bg-neutral-700"
-            >
-                {isListening ? "Stop Listening" : "Start Listening"}
-            </button>
-
-            <div className="mt-8 w-full max-w-2xl rounded-lg bg-neutral-100 p-6">
-                {/* Current phrase being transcribed */}
-                {currentPhrase && (
-                    <p className="font-mono text-lg text-blue-600">
-                        {currentPhrase}
-                    </p>
-                )}
-
-                {/* History of transcribed phrases */}
-                <div className="mt-4 space-y-2">
-                    {messages.map((message) => (
-                        <p
-                            key={message.id}
-                            className={cn(
-                                "font-mono text-lg",
-                                message.role === "assistant"
-                                    ? "text-green-600"
-                                    : "text-neutral-900"
-                            )}
-                        >
-                            {message.content}
-                        </p>
-                    ))}
+        <div className="lk-room-container relative mx-auto h-full max-h-full w-full max-w-full overflow-hidden">
+            <RoomContext.Provider value={room}>
+                <video
+                    ref={videoRef}
+                    className="hidden"
+                    playsInline
+                />
+                <div className="relative flex h-full min-h-full w-full min-w-full items-center justify-center overflow-hidden">
+                    <canvas
+                        ref={canvasRef}
+                        className="h-[100vw] scale-x-[-1] rotate-90 object-cover"
+                    />
                 </div>
-            </div>
+
+                <div className="absolute bottom-8 z-50 flex w-full flex-row items-center justify-center">
+                    <ControlBar />
+                </div>
+                <TranscriptionView />
+                <RoomAudioRenderer />
+            </RoomContext.Provider>
         </div>
     );
 }

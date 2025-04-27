@@ -7,7 +7,7 @@ export default async function Layout({
     return (
         <MicrophoneContextProvider>
             <DeepgramContextProvider>
-                <div className="mx-auto flex aspect-[9/16] h-screen flex-col bg-white text-neutral-900">
+                <div className="mx-auto flex h-screen flex-col bg-white text-neutral-900">
                     {children}
                 </div>
             </DeepgramContextProvider>

@@ -1,3 +1,4 @@
 cv/Anaconda Prompt for magicmirror cv thingy.lnk
 cv/yolo11x-seg.pt
-.env
+.venv
+.env*

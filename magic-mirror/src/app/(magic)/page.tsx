@@ -1,8 +1,7 @@
 import { Client } from "@/components/client";
-import { generateUUID } from "@/lib/utils";
+import { MediaPipeClient } from "@/components/mediapipe-client";
 
-export default function Page() {
-    const id = generateUUID();
-
-    return <Client id={id} />;
+export default async function Page() {
+    return <Client />;
+    // return <MediaPipeClient />;
 }
