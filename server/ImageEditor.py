@@ -1,5 +1,4 @@
-#!/usr/bin/env python3
-# pip install diffusers accelerate transformers xformers --upgrade
+# This is for the H100 server, not local. ~40g vram usage last time I checked
 
 import numpy as np
 import torch

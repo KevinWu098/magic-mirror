@@ -7,8 +7,6 @@ load_dotenv()
 
 client = OpenAI()
 
-
-
 prompt = "Make this shirt red"
 
 start_time = time.time()
@@ -20,7 +18,7 @@ result = client.images.edit(
     ],
     prompt=prompt,
     size="1024x1024",
-    quality="medium"
+    quality="medium",
 )
 
 end_time = time.time()
