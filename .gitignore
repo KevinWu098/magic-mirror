@@ -4,3 +4,4 @@ cv/yolo11x-seg.pt
 .env*
 cv/google_lens_result.json
 server/edited_image.png
+server/saved_images/*
