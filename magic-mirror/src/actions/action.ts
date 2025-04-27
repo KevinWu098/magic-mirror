@@ -77,7 +77,11 @@ export async function generateClothing(
     garment: File,
     category: "Lower-body" | "Upper-body" | "Dresses",
     vtonImage: File
-): Promise<{ result: string }> {
+): Promise<{
+    maskedImage: string;
+    overlaidImage: string;
+    originalImage: string;
+}> {
     // Convert garment File to base64
     const garmentBase64 = await new Promise<string>((resolve) => {
         const reader = new FileReader();
@@ -121,7 +125,11 @@ export async function generateClothing(
         }
 
         const data = await response.json();
-        return { result: data.result_image_base64 };
+        return {
+            maskedImage: data.masked_img_base64,
+            overlaidImage: data.overlaid_img_base64,
+            originalImage: data.original_img_base64,
+        };
     } catch (error) {
         console.error("Error during generation:", error);
         throw error;

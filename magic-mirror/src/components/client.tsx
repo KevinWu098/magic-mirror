@@ -34,6 +34,7 @@ import {
     Track,
 } from "livekit-client";
 import { Mic2Icon, MicOffIcon, XIcon } from "lucide-react";
+import { motion } from "motion/react";
 
 // Message type
 interface Message {
@@ -47,10 +48,15 @@ export function Client() {
 
     const [room] = useState(new Room());
     const [tryOnResult, setTryOnResult] = useState<string | null>(null);
+    const [tryOnOriginalResult, setTryOnOriginalResult] = useState<
+        string | null
+    >(null);
+
     const [showModal, setShowModal] = useState(false);
     const [isMuted, setIsMuted] = useState(false);
     const [showClothingOptionsView, setShowClothingOptionsView] =
         useState(false);
+    const [isVideoLoaded, setIsVideoLoaded] = useState(false);
 
     // New state for captions
     const [messages, setMessages] = useState<Message[]>([]);
@@ -196,7 +202,7 @@ export function Client() {
                     ctx.rotate(-Math.PI / 2);
                     ctx.drawImage(videoRef.current, 0, 0);
 
-                    // Convert canvas to blob with scaled dimensions
+                    // Convert canvas to blob with scaled dimensions and mirror the image
                     const vtonBlob = await new Promise<Blob>((resolve) => {
                         const scaledCanvas = document.createElement("canvas");
                         // Calculate width to maintain aspect ratio with height of 1024
@@ -205,6 +211,9 @@ export function Client() {
                         scaledCanvas.height = 1024;
                         const scaledCtx = scaledCanvas.getContext("2d");
                         if (scaledCtx) {
+                            // Mirror the image horizontally
+                            scaledCtx.translate(scaledCanvas.width, 0);
+                            scaledCtx.scale(-1, 1);
                             scaledCtx.drawImage(
                                 canvas,
                                 0,
@@ -235,16 +244,17 @@ export function Client() {
                         type: "image/jpeg",
                     });
 
-                    const { result } = await generateClothing(
-                        garmentFile,
-                        "Upper-body",
-                        vtonFile
-                    );
-                    console.log(result.toString());
+                    const { maskedImage, overlaidImage, originalImage } =
+                        await generateClothing(
+                            garmentFile,
+                            "Upper-body",
+                            vtonFile
+                        );
                     console.log("SUCCESS");
 
                     // Store the result and show modal
-                    setTryOnResult(result.toString());
+                    setTryOnResult(overlaidImage.toString());
+                    setTryOnOriginalResult(originalImage.toString());
                     setShowModal(true);
 
                     return "SUCCESS";
@@ -290,6 +300,27 @@ export function Client() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    useEffect(() => {
+        const handleVideoLoad = () => {
+            if (videoRef.current) {
+                setIsVideoLoaded(true);
+            }
+        };
+
+        if (videoRef.current) {
+            videoRef.current.addEventListener("loadeddata", handleVideoLoad);
+        }
+
+        return () => {
+            if (videoRef.current) {
+                videoRef.current.removeEventListener(
+                    "loadeddata",
+                    handleVideoLoad
+                );
+            }
+        };
+    }, [videoRef]);
+
     return (
         <div className="lk-room-container relative mx-auto h-full max-h-full w-full max-w-full overflow-hidden">
             <RoomContext.Provider value={room}>
@@ -299,12 +330,22 @@ export function Client() {
                         className="hidden"
                         playsInline
                     />
+
                     <div className="relative flex h-full min-h-full w-full min-w-full items-center justify-center overflow-hidden rounded-2xl">
-                        <canvas
+                        <motion.canvas
                             ref={canvasRef}
                             className="h-[100vw] scale-x-[-1] rotate-90 object-cover"
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: isVideoLoaded ? 1 : 0 }}
+                            transition={{ duration: 0.5, ease: "easeInOut" }}
                         />
                     </div>
+
+                    {(!canvasRef.current || !isVideoLoaded) && (
+                        <div className="relative flex h-full min-h-full w-full min-w-full -translate-y-1/2 items-center justify-center overflow-hidden rounded-2xl">
+                            <div className="absolute inset-0 z-10 animate-pulse rounded-2xl bg-gray-300 dark:bg-gray-700" />
+                        </div>
+                    )}
 
                     <div className="absolute bottom-4 left-1/2 -translate-x-1/2 text-5xl">
                         {isMuted ? "Muted" : "Unmuted"}
@@ -364,11 +405,32 @@ export function Client() {
                 onOpenChange={setShowModal}
             >
                 <DialogContent className="max-w-none sm:max-w-[calc(100vw-32rem)]">
-                    <img
-                        src={`data:image/jpeg;base64,${tryOnResult}`}
-                        alt="Try-on Result"
-                        className="h-[80vh]"
-                    />
+                    <div className="relative h-[80vh]">
+                        <motion.img
+                            initial={{ opacity: 1 }}
+                            animate={{ opacity: 1 }}
+                            transition={{
+                                delay: 1,
+                                duration: 2.5,
+                                ease: "easeInOut",
+                            }}
+                            src={`data:image/jpeg;base64,${tryOnResult}`}
+                            alt="Try-on Result"
+                            className="absolute inset-0 h-full w-full object-contain"
+                        />
+                        <motion.img
+                            initial={{ opacity: 1 }}
+                            animate={{ opacity: 0 }}
+                            transition={{
+                                delay: 1,
+                                duration: 2.5,
+                                ease: "easeInOut",
+                            }}
+                            src={`data:image/jpeg;base64,${tryOnOriginalResult}`}
+                            alt="Original Result"
+                            className="absolute inset-0 z-[100] h-full w-full object-contain"
+                        />
+                    </div>
                 </DialogContent>
             </Dialog>
         </div>
