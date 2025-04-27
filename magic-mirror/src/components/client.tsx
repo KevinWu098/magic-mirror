@@ -25,6 +25,7 @@ import { MotionImage } from "@/components/ui/motion-image";
 import { useHandTracking } from "@/hooks/useHandTracking";
 import { onDeviceFailure } from "@/lib/livekit";
 import { captureAndProcessVideoFrame } from "@/lib/rpc";
+import { cn } from "@/lib/utils";
 import {
     RoomAudioRenderer,
     RoomContext,
@@ -37,14 +38,24 @@ import {
     RpcInvocationData,
     Track,
 } from "livekit-client";
-import { Mic2Icon, MicOffIcon, XIcon } from "lucide-react";
+import { DownloadIcon, Mic2Icon, MicOffIcon, XIcon } from "lucide-react";
 import { motion } from "motion/react";
+import { toast } from "sonner";
 
 // Message type
 interface Message {
     role: "assistant" | "user";
     text: string;
 }
+
+interface ImageItem {
+    src: string;
+    alt: string;
+    width: number;
+    height: number;
+}
+
+const SHOULD_CONNECT = true;
 
 export function Client() {
     const { videoRef, canvasRef, isGrabbing, swipeDirection } =
@@ -72,11 +83,29 @@ export function Client() {
 
     const [garment, setGarment] = useState<File | null>(null);
 
+    const [images, setImages] = useState<ImageItem[]>([
+        {
+            src: "/dev/kevin.jpg",
+            alt: "Kevin",
+            width: 1024,
+            height: 1024,
+        },
+        {
+            src: "/dev/garment.jpg",
+            alt: "Dress",
+            width: 1024,
+            height: 1024,
+        },
+    ]);
+
     const toggleMute = async () => {
         const newMuteState = !isMuted;
         setIsMuted(newMuteState);
         await room.localParticipant.setMicrophoneEnabled(!newMuteState);
     };
+
+    const [loading, setLoading] = useState(false);
+    const [isDragging, setIsDragging] = useState(false);
 
     useEffect(() => {
         async function connect() {
@@ -96,7 +125,9 @@ export function Client() {
             await room.localParticipant.setMicrophoneEnabled(!isMuted);
         }
 
-        connect();
+        if (SHOULD_CONNECT) {
+            connect();
+        }
 
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
@@ -116,6 +147,7 @@ export function Client() {
             "tryOnClothing",
             async (data: RpcInvocationData) => {
                 try {
+                    setLoading(true);
                     const vtonBlob =
                         await captureAndProcessVideoFrame(videoRef);
 
@@ -148,6 +180,8 @@ export function Client() {
                     return "SUCCESS";
                 } catch (error) {
                     throw new RpcError(1, "Failed to capture video frame");
+                } finally {
+                    setLoading(false);
                 }
             }
         );
@@ -156,6 +190,8 @@ export function Client() {
             "tryOnCreativeClothing",
             async (data: RpcInvocationData) => {
                 try {
+                    setLoading(true);
+
                     const payload = JSON.parse(data.payload);
                     const generationRequest = payload.generationRequest;
                     setGeneratedImage1(null);
@@ -164,7 +200,7 @@ export function Client() {
                     const vtonBlob =
                         await captureAndProcessVideoFrame(videoRef);
 
-                    setShowGeneratedModal(true);
+                    // setShowGeneratedModal(true);
 
                     // Generate images independently to handle them as they complete
                     const result = await generateImage(
@@ -189,6 +225,8 @@ export function Client() {
                         .split(",")[1]!;
                     result.imageBase64 = resizedBase64;
                     setGeneratedImage1(result.imageBase64);
+
+                    setShowGeneratedModal(true);
 
                     // const generateSecondImage = generateImage(
                     //     null,
@@ -233,6 +271,8 @@ export function Client() {
                     return "SUCCESS";
                 } catch (error) {
                     throw new RpcError(1, "Failed to capture video frame");
+                } finally {
+                    setLoading(false);
                 }
             }
         );
@@ -294,10 +334,139 @@ export function Client() {
         };
     }, [videoRef]);
 
+    // Add drag and drop handlers
+    const handleDragOver = (e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragging(true);
+    };
+
+    const handleDragLeave = (e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragging(false);
+    };
+
+    const handleDrop = async (e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragging(false);
+
+        // Add detailed logging
+        console.log("Drop event:", e);
+        console.log("Files:", Array.from(e.dataTransfer.files));
+        console.log("Types:", e.dataTransfer.types);
+
+        // Handle images dragged from web
+        const items = Array.from(e.dataTransfer.items);
+        console.log(
+            "Items:",
+            items.map((item) => ({
+                kind: item.kind,
+                type: item.type,
+            }))
+        );
+
+        for (const item of items) {
+            console.log("Processing item:", {
+                kind: item.kind,
+                type: item.type,
+            });
+
+            // Try to get image data directly
+            if (item.type.startsWith("image/")) {
+                console.log("Found image type");
+                const file = item.getAsFile();
+                console.log("File from image:", file);
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = (event) => {
+                        if (!event.target?.result) {
+                            console.error("Failed to read file");
+                            return;
+                        }
+
+                        const base64String = event.target.result as string;
+                        console.log("Successfully read image data");
+                        const newImage: ImageItem = {
+                            src: base64String,
+                            alt: "Dragged image",
+                            width: 1024,
+                            height: 1024,
+                        };
+                        setImages((prevImages) => [newImage, ...prevImages]);
+                    };
+                    reader.readAsDataURL(file);
+                }
+                continue;
+            }
+
+            // Fallback to handling URL if available
+            if (item.kind === "string") {
+                if (
+                    item.type === "text/uri-list" ||
+                    item.type === "text/plain" ||
+                    item.type === "text/html"
+                ) {
+                    console.log("Found string type:", item.type);
+                    item.getAsString((data) => {
+                        console.log("String data:", data);
+                        // Try to extract image URL from HTML if present
+                        let url = data;
+
+                        // First try to extract from HTML img tag
+                        const imgSrcMatch = data.match(
+                            /img[^>]+src=["']([^"']+)/i
+                        );
+                        if (imgSrcMatch && imgSrcMatch[1]) {
+                            url = imgSrcMatch[1];
+                            console.log("Found img src URL:", url);
+                        }
+                        // If no img tag or if it's a direct URL
+                        if (
+                            !url.includes("img") &&
+                            url.match(/^https?:\/\/[^\s<>"']+/i)
+                        ) {
+                            console.log("Using direct URL:", url);
+                        }
+
+                        // If we have a URL that looks like an image URL, use it
+                        if (url.match(/\.(jpeg|jpg|gif|png|webp)/i) !== null) {
+                            console.log("Found valid image URL:", url);
+                            const newImage: ImageItem = {
+                                src: url,
+                                alt: "Dragged image",
+                                width: 1024,
+                                height: 1024,
+                            };
+                            setImages((prevImages) => [
+                                newImage,
+                                ...prevImages,
+                            ]);
+                            toast.success("Clothing uploaded successfully", {
+                                position: "top-center",
+                            });
+                        } else {
+                            console.log("No valid image URL found in:", url);
+                        }
+                    });
+                }
+            }
+        }
+    };
+
     return (
-        <div className="lk-room-container relative mx-auto h-full max-h-full w-full max-w-full overflow-hidden">
+        <div
+            className={cn(
+                "lk-room-container relative mx-auto h-full max-h-full w-full max-w-full overflow-hidden"
+            )}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+        >
             <RoomContext.Provider value={room}>
-                <div className="flex h-full flex-col items-center justify-center p-[5%]">
+                {/* <div className="text-5xl">Magic Mirror</div> */}
+                <div className="flex h-full flex-col items-center justify-center p-[5%] pb-[7%]">
                     <video
                         ref={videoRef}
                         className="hidden"
@@ -307,24 +476,80 @@ export function Client() {
                     <div className="relative flex h-full min-h-full w-full min-w-full items-center justify-center overflow-hidden rounded-2xl">
                         <motion.canvas
                             ref={canvasRef}
-                            className="h-[100vw] scale-x-[-1] rotate-90 object-cover"
+                            className="pointer-events-none h-[100vw] scale-x-[-1] rotate-90 object-cover"
                             initial={{ opacity: 0 }}
                             animate={{ opacity: isVideoLoaded ? 1 : 0 }}
                             transition={{ duration: 0.5, ease: "easeInOut" }}
                         />
+                        {loading && (
+                            <motion.div
+                                animate={{ opacity: isVideoLoaded ? 1 : 0 }}
+                                className="pointer-events-none absolute inset-0 h-full w-full animate-pulse border-[24px] border-blue-400"
+                            />
+                        )}
+                        {isDragging && (
+                            <motion.div
+                                animate={{ opacity: isVideoLoaded ? 1 : 0 }}
+                                className="pointer-events-none absolute inset-0 h-full w-full animate-pulse border-[24px] border-green-400"
+                            />
+                        )}
                     </div>
 
                     {(!canvasRef.current || !isVideoLoaded) && (
                         <div className="relative flex h-full min-h-full w-full min-w-full -translate-y-1/2 items-center justify-center overflow-hidden rounded-2xl">
-                            <div className="absolute inset-0 z-10 animate-pulse rounded-2xl bg-gray-300 dark:bg-gray-700" />
+                            <div className="pointer-events-none absolute inset-0 z-10 animate-pulse rounded-2xl bg-gray-300 dark:bg-gray-700" />
                         </div>
                     )}
 
-                    <div className="absolute bottom-4 left-1/2 -translate-x-1/2 text-5xl">
-                        {isMuted ? "Muted" : "Unmuted"}
+                    <div className="absolute bottom-4 left-1/2 z-20 mx-auto grid w-full -translate-x-1/2 grid-cols-3 items-center justify-center gap-4">
+                        {images.length > 2 && images[0]?.src ? (
+                            <Button
+                                variant="ghost"
+                                size="icon"
+                                className="mx-auto h-fit w-fit bg-transparent text-black"
+                                onClick={() => {
+                                    const imageUrl = images[0]!.src;
+                                    // Download the most recent image
+                                    const link = document.createElement("a");
+                                    link.href = imageUrl;
+                                    link.download = "dragged-image.jpg";
+                                    document.body.appendChild(link);
+                                    link.click();
+                                    document.body.removeChild(link);
+                                    toast.success(
+                                        "Image downloaded successfully"
+                                    );
+                                }}
+                            >
+                                <DownloadIcon className="size-16" />
+                            </Button>
+                        ) : (
+                            <div className="size-16" /> // Empty placeholder to maintain grid spacing
+                        )}
+
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={toggleMute}
+                            className="mx-auto h-fit w-fit bg-transparent text-black"
+                        >
+                            {isMuted ? (
+                                <MicOffIcon className="size-16" />
+                            ) : (
+                                <Mic2Icon className="size-16" />
+                            )}
+                        </Button>
+
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            className="mx-auto h-fit w-fit bg-transparent text-black"
+                        >
+                            <Mic2Icon className="size-16" />
+                        </Button>
                     </div>
 
-                    <div className="absolute top-8 left-8 -translate-x-1/2">
+                    {/* <div className="absolute top-8 left-8 -translate-x-1/2">
                         <Button
                             variant="ghost"
                             size="icon"
@@ -337,7 +562,7 @@ export function Client() {
                                 <Mic2Icon className="size-24" />
                             )}
                         </Button>
-                    </div>
+                    </div> */}
 
                     {/* <TranscriptionView /> */}
                     <Captions
@@ -345,30 +570,7 @@ export function Client() {
                         userIsFinal={userIsFinal}
                     />
 
-                    {showClothingOptionsView && (
-                        <MotionImage
-                            images={[
-                                {
-                                    src: "/dev/bunny.jpg",
-                                    alt: "Bunny",
-                                    width: 1024,
-                                    height: 1024,
-                                },
-                                {
-                                    src: "/dev/kevin.jpg",
-                                    alt: "Kevin",
-                                    width: 1024,
-                                    height: 1024,
-                                },
-                                {
-                                    src: "/dev/garment.jpg",
-                                    alt: "Dress",
-                                    width: 1024,
-                                    height: 1024,
-                                },
-                            ]}
-                        />
-                    )}
+                    {showClothingOptionsView && <MotionImage images={images} />}
                 </div>
                 <RoomAudioRenderer />
             </RoomContext.Provider>

@@ -92,11 +92,16 @@ class Assistant(Agent):
             raise ToolError("Unable to take calibration image")
 
     @function_tool()
-    async def try_on_clothing(
+    async def try_on_standard_clothing(
         self,
         context: RunContext,
     ) -> dict[str, Any]:
-        """Generate an image of the user wearing the garment. THIS TOOL SHOULD BE USED WHEN THE REFERENCED GARMENT IS "DEFAULT". THIS INCLUDES THE BLUE T SHIRT.
+        """
+        Generate an image of the user wearing the garment. 
+        THIS TOOL SHOULD BE USED WHEN THE REFERENCED GARMENT IS PART OF THE STANDARD PRE-PREPPED SET.
+        
+        PRE-PREPPED SET:
+         - BLUE T SHIRT.
         
         Args:
             None
@@ -107,7 +112,7 @@ class Assistant(Agent):
             participant_identity = next(iter(room.remote_participants))
             
             global session
-            await session.say("Sure! Creating try-on...")
+            await session.say("Sure! Please hold still momentarily. Creating try-on...")
             
             response = await room.local_participant.perform_rpc(
                 destination_identity=participant_identity,
@@ -127,7 +132,9 @@ class Assistant(Agent):
         generationRequest: str,
         context: RunContext,
     ) -> dict[str, Any]:
-        """Generate an image of the user wearing the garment they have described. USE THIS TOOL WHEN THEY DESCRIBE THE CLOTHING ITEM.
+        """
+        Generate an image of the user wearing the garment they have described. USE THIS TOOL WHEN THEY DESCRIBE THE CLOTHING ITEM.
+        DO NOT USE THIS TOOL IF THEY REFERENCE A GARMENT THAT IS PART OF THE STANDARD PRE-PREPPED SET.
         
         Args:
             generationRequest: The request for what the clothing generated should be. The image should consist of only the garment on a white background. ALWAYS ALWAYS SPECIFY IN THE REQUEST THAT THE BACKGROUND SHOULD BE COMPLETELY WHITE. ALSO SPECIFY THAT YOU SHOULD ONLY GENERATE THE CLOTHING ITEM WITHOUT A MODEL WEARING THE CLOTHING.
@@ -138,7 +145,7 @@ class Assistant(Agent):
             participant_identity = next(iter(room.remote_participants))
             
             global session
-            await session.say("Sure! Creating creative try-on...")
+            await session.say("Sure! Please hold still momentarily. Creating creative try-on...")
             
             response = await room.local_participant.perform_rpc(
                 destination_identity=participant_identity,
