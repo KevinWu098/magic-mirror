@@ -92,14 +92,20 @@ class Assistant(Agent):
             raise ToolError("Unable to take calibration image")
 
     @function_tool()
-    async def try_on_clothing(
+    async def try_on_standard_clothing(
         self,
+        body_part: str,
         context: RunContext,
     ) -> dict[str, Any]:
-        """Generate an image of the user wearing the garment. THIS TOOL SHOULD BE USED WHEN THE REFERENCED GARMENT IS "DEFAULT". THIS INCLUDES THE BLUE T SHIRT.
+        """
+        Generate an image of the user wearing the garment. 
+        THIS TOOL SHOULD BE USED WHEN THE REFERENCED GARMENT IS PART OF THE STANDARD PRE-PREPPED SET.
+        
+        PRE-PREPPED SET:
+         - BLUE T SHIRT.
         
         Args:
-            None
+            body_part: The body part that the clothing item is for. Can be "Upper-body", "Lower-body", or "Full-body".
         """
 
         try:
@@ -107,13 +113,13 @@ class Assistant(Agent):
             participant_identity = next(iter(room.remote_participants))
             
             global session
-            await session.say("Sure! Creating try-on...")
+            await session.say("Sure! Please hold still momentarily. Creating try-on...")
             
             response = await room.local_participant.perform_rpc(
                 destination_identity=participant_identity,
                 method="tryOnClothing",
                 response_timeout=15.0,
-                payload=json.dumps({}),
+                payload=json.dumps({"body_part": body_part}),
             )
             
             print(response)
@@ -124,13 +130,17 @@ class Assistant(Agent):
     @function_tool()
     async def create_try_on_clothing(
         self,
+        body_part: str,
         generationRequest: str,
         context: RunContext,
     ) -> dict[str, Any]:
-        """Generate an image of the user wearing the garment they have described. USE THIS TOOL WHEN THEY DESCRIBE THE CLOTHING ITEM.
+        """
+        Generate an image of the user wearing the garment they have described. USE THIS TOOL WHEN THEY DESCRIBE THE CLOTHING ITEM.
+        DO NOT USE THIS TOOL IF THEY REFERENCE A GARMENT THAT IS PART OF THE STANDARD PRE-PREPPED SET.
         
         Args:
             generationRequest: The request for what the clothing generated should be. The image should consist of only the garment on a white background. ALWAYS ALWAYS SPECIFY IN THE REQUEST THAT THE BACKGROUND SHOULD BE COMPLETELY WHITE. ALSO SPECIFY THAT YOU SHOULD ONLY GENERATE THE CLOTHING ITEM WITHOUT A MODEL WEARING THE CLOTHING.
+            body_part: The body part that the clothing item is for. Can be "Upper-body", "Lower-body", or "Full-body".
         """
 
         try:
@@ -138,13 +148,13 @@ class Assistant(Agent):
             participant_identity = next(iter(room.remote_participants))
             
             global session
-            await session.say("Sure! Creating creative try-on...")
+            await session.say("Sure! Please hold still momentarily. Creating creative try-on...")
             
             response = await room.local_participant.perform_rpc(
                 destination_identity=participant_identity,
                 method="tryOnCreativeClothing",
                 response_timeout=60.0,
-                payload=json.dumps({"generationRequest": generationRequest}),
+                payload=json.dumps({"body_part": body_part, "generationRequest": generationRequest}),
             )
             
             print(response)
@@ -178,6 +188,120 @@ class Assistant(Agent):
             return f'Tell the user the result of the clothing handling: {response}. If error, please ask them to try again.'
         except Exception:
             raise ToolError("Unable to handle clothing options")
+    
+    @function_tool()
+    async def handle_standard_modal(
+        self,
+        show: bool,
+        context: RunContext,
+    ) -> dict[str, Any]:
+        """Show or hide (handle) the standard modal on the frontend
+        
+        Args:
+            show: Whether to show or hide the standard modal
+        """
+
+        try:
+            room = get_job_context().room
+            participant_identity = next(iter(room.remote_participants))
+            response = await room.local_participant.perform_rpc(
+                destination_identity=participant_identity,
+                method="showStandardModal",
+                response_timeout=5.0,
+                payload=json.dumps({"show": show}),
+            )
+            
+            print(response)
+            return f'Tell the user the result of the standard modal handling: {response}. If error, please ask them to try again.'
+        except Exception:
+            raise ToolError("Unable to handle standard modal")
+   
+    @function_tool()
+    async def handle_creative_modal(
+        self,
+        show: bool,
+        context: RunContext,
+    ) -> dict[str, Any]:
+        """Show or hide (handle) the creative modal on the frontend
+        
+        Args:
+            show: Whether to show or hide the creative modal
+        """
+
+        try:
+            room = get_job_context().room
+            participant_identity = next(iter(room.remote_participants))
+            response = await room.local_participant.perform_rpc(
+                destination_identity=participant_identity,
+                method="showCreativeModal",
+                response_timeout=5.0,
+                payload=json.dumps({"show": show}),
+            )
+            
+            print(response)
+            return f'Tell the user the result of the creative modal handling: {response}. If error, please ask them to try again.'
+        except Exception:
+            raise ToolError("Unable to handle creative modal")
+
+    @function_tool()
+    async def handle_search_options(
+        self,
+        show: bool,
+        context: RunContext,
+    ) -> dict[str, Any]:
+        """Show or hide (handle) the displayed search options on the frontend
+        
+        Args:
+            show: Whether to show or hide the search options
+        """
+
+        try:
+            room = get_job_context().room
+            participant_identity = next(iter(room.remote_participants))
+            response = await room.local_participant.perform_rpc(
+                destination_identity=participant_identity,
+                method="showSearchOptions",
+                response_timeout=5.0,
+                payload=json.dumps({"show": show}),
+            )
+            
+            print(response)
+            return f'Tell the user the result of the search handling: {response}. If error, please ask them to try again.'
+        except Exception:
+            raise ToolError("Unable to handle search options")
+
+    @function_tool()
+    async def find_similar_clothing(
+        self,
+        context: RunContext,
+    ) -> dict[str, Any]:
+        """
+        Find similar clothing to the one the user has used/generated. JUST DO IT THE IMAGE WILL BE PRESENT.
+        USE THIS WHEN THE USER ASKS YOU TO SEARCH THE WEB FOR CLOTHING
+        DO NOT ASK FOR ADDITIONAL INFORMATION. JUST DO IT.
+        
+        Args:
+            None
+        """
+
+        try:
+            room = get_job_context().room
+            participant_identity = next(iter(room.remote_participants))
+            
+            global session
+            await session.say("Searching the web for similar clothing...")
+            
+            response = await room.local_participant.perform_rpc(
+                destination_identity=participant_identity,
+                method="findSimilarClothing",
+                response_timeout=45.0,
+                payload=json.dumps({}),
+            )
+            
+            print(response)
+            return f'Tell the user the result of the clothing search: {response}. If error, please ask them to try again.'
+        except Exception:
+            raise ToolError("Unable to find similar clothing")
 
 
 async def entrypoint(ctx: agents.JobContext):

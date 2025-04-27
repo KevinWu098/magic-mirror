@@ -19,8 +19,8 @@ export function ClothingDialog({
             open={showModal}
             onOpenChange={setShowModal}
         >
-            <DialogContent className="h-fit max-w-none p-0 sm:max-w-[calc(100vw-32rem)]">
-                <div className="relative min-h-[65vh]">
+            <DialogContent className="h-fit max-w-none p-0 sm:max-w-[calc(100vw-16rem)]">
+                <div className="relative min-h-[82.25vh]">
                     <motion.img
                         initial={{ opacity: 1 }}
                         animate={{ opacity: 1 }}

@@ -32,7 +32,7 @@ export function MotionImage({
                 ease: [0.32, 0.72, 0, 1],
             }}
             className={cn(
-                "aspect-square w-1/3 overflow-hidden rounded-xl border-8 border-blue-500",
+                "aspect-square overflow-hidden rounded-xl border-8 border-blue-500",
                 containerClassName
             )}
         >
@@ -47,7 +47,7 @@ export function MotionImage({
     ));
 
     return (
-        <div className="absolute bottom-32 flex w-full items-center justify-between gap-8 px-40">
+        <div className="absolute bottom-32 grid w-full grid-cols-3 gap-8 px-40">
             {motionDivs}
         </div>
     );
