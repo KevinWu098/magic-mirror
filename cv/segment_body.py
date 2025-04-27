@@ -58,12 +58,34 @@ def find_best_person(boxes, frame_width, frame_height):
     
     return best_idx
 
-def get_segmentation_data(frame):
+def refine_mask(mask, kernel_size=5):
+    """
+    Apply morphological operations to refine the mask.
+    
+    Args:
+        mask: Input binary mask
+        kernel_size: Size of the morphological kernel
+        
+    Returns:
+        Refined mask
+    """
+    kernel = np.ones((kernel_size, kernel_size), np.uint8)
+    
+    # Close the mask to fill small holes
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+    
+    # Dilate the mask slightly to extend the edges
+    mask = cv2.dilate(mask, kernel, iterations=1)
+    
+    return mask
+
+def get_segmentation_data(frame, retina_masks=True):
     """
     Get segmentation data for people in the frame, with the best person as the first element.
     
     Args:
         frame: Input image frame
+        retina_masks: Whether to use high-quality retina masks for better segmentation
     
     Returns:
         List of dictionaries containing segmentation data, with best person first.
@@ -74,7 +96,8 @@ def get_segmentation_data(frame):
             - 'class_name': class name
             - 'is_best': boolean indicating if this is the best person
     """
-    results = model(frame, classes=[PERSON_CLASS_ID], verbose=False)
+    # Use a lower confidence threshold to capture more of the body
+    results = model(frame, classes=[PERSON_CLASS_ID], verbose=False, retina_masks=retina_masks, conf=0.2)
     segmentation_data = []
     
     if results and results[0].masks is not None:
@@ -92,12 +115,41 @@ def get_segmentation_data(frame):
             
             # Process mask
             mask_np = mask.cpu().numpy()
-            mask_np = cv2.resize(mask_np, (frame.shape[1], frame.shape[0]))
+            
+            # Only resize if not using retina_masks (retina masks are already properly sized)
+            if not retina_masks:
+                mask_np = cv2.resize(mask_np, (frame.shape[1], frame.shape[0]))
+            
             mask_np = (mask_np > 0.5).astype(np.uint8)
+            
+            # Get bounding box coordinates
+            x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+            
+            # Extend the bottom of the mask a bit to compensate for possible cutoffs
+            # Calculate the extension as a percentage of the body height
+            extension_ratio = 0.05  # Extend by 5% of the body height
+            bottom_extension = int((y2 - y1) * extension_ratio)
+            
+            # Create extended mask
+            extended_mask = mask_np.copy()
+            
+            # Only extend for the bottom part and within image boundaries
+            max_y = min(y2 + bottom_extension, frame.shape[0] - 1)
+            
+            # For pixels in the extension area, check if they're close to the bottom of the current mask
+            if y2 < max_y:
+                for y in range(y2, max_y + 1):
+                    for x in range(max(x1, 0), min(x2, frame.shape[1])):
+                        # Check if there's mask content in the row just above
+                        if y > 0 and np.any(mask_np[y-3:y, max(x-2, 0):min(x+3, frame.shape[1]-1)] == 1):
+                            extended_mask[y, x] = 1
+            
+            # Apply morphological operations to refine the mask
+            refined_mask = refine_mask(extended_mask, kernel_size=5)
             
             # Store segmentation data
             data = {
-                'mask': mask_np,
+                'mask': refined_mask,
                 'box': box.xyxy[0].tolist(),
                 'class_id': class_id,
                 'class_name': class_name,
@@ -146,6 +198,15 @@ if __name__ == "__main__":
     
     prev_time = 0 # to calculate fps
     
+    # Use retina masks by default for higher quality segmentation
+    use_retina_masks = True
+    
+    # Display controls
+    print("Controls:")
+    print("  q: Quit")
+    print("  f: Toggle fullscreen")
+    print("  r: Toggle retina masks")
+    
     while True:
         current_time = time.time()
         ret, frame = cap.read()
@@ -154,7 +215,7 @@ if __name__ == "__main__":
             break
         frame = cv2.flip(frame, 1) # mirror frame so its a mirror
     
-        segmentation_data = get_segmentation_data(frame)
+        segmentation_data = get_segmentation_data(frame, retina_masks=use_retina_masks)
         processed_frame = frame.copy()
     
         # Visualize the segmentation data
@@ -183,6 +244,10 @@ if __name__ == "__main__":
     
         # draw fps text
         cv2.putText(processed_frame, f"FPS: {fps:.2f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        
+        # Add text showing if retina masks are enabled
+        mask_text = "Retina Masks: ON" if use_retina_masks else "Retina Masks: OFF"
+        cv2.putText(processed_frame, mask_text, (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
     
         cv2.imshow(WINDOW_NAME, processed_frame)
     
@@ -193,6 +258,10 @@ if __name__ == "__main__":
              current_prop = cv2.getWindowProperty(WINDOW_NAME, cv2.WND_PROP_FULLSCREEN)
              cv2.setWindowProperty(WINDOW_NAME, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_NORMAL 
                                    if current_prop == cv2.WINDOW_FULLSCREEN else cv2.WINDOW_FULLSCREEN)
+        elif key == ord('r'):
+            # Toggle retina masks on/off
+            use_retina_masks = not use_retina_masks
+            print(f"Retina masks {'enabled' if use_retina_masks else 'disabled'}")
     
     cap.release()
     cv2.destroyAllWindows()
