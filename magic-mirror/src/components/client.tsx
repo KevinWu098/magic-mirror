@@ -208,7 +208,13 @@ export function Client() {
             "tryOnClothing",
             async (data: RpcInvocationData) => {
                 try {
+                    const payload = JSON.parse(data.payload);
+                    const bodyPart = payload.body_part;
+
                     setLoading(true);
+                    setShowModal(false);
+                    setShowGeneratedModal(false);
+
                     const vtonBlob =
                         await captureAndProcessVideoFrame(videoRef);
 
@@ -228,11 +234,7 @@ export function Client() {
                     setGarment(garmentFile);
 
                     const { maskedImage, overlaidImage, originalImage } =
-                        await generateClothing(
-                            garmentFile,
-                            "Upper-body",
-                            vtonFile
-                        );
+                        await generateClothing(garmentFile, bodyPart, vtonFile);
                     console.log("SUCCESS");
 
                     // Store the result and show modal
@@ -254,9 +256,12 @@ export function Client() {
             async (data: RpcInvocationData) => {
                 try {
                     setLoading(true);
+                    setShowModal(false);
+                    setShowGeneratedModal(false);
 
                     const payload = JSON.parse(data.payload);
                     const generationRequest = payload.generationRequest;
+                    const bodyPart = payload.body_part;
                     setGeneratedImage1(null);
                     setGeneratedImage2(null);
 
@@ -308,11 +313,7 @@ export function Client() {
                     setGarment(garmentFile);
 
                     const { maskedImage, overlaidImage, originalImage } =
-                        await generateClothing(
-                            garmentFile,
-                            "Upper-body",
-                            vtonFile
-                        );
+                        await generateClothing(garmentFile, bodyPart, vtonFile);
                     console.log("SUCCESS");
 
                     // Store the result and show modal
@@ -337,6 +338,34 @@ export function Client() {
 
                 setShowSearchOptionsView(false);
                 setShowClothingOptionsView(payload.show);
+
+                return "SUCCESS";
+            }
+        );
+
+        localParticipant.registerRpcMethod(
+            "showStandardModal",
+            async (data: RpcInvocationData) => {
+                const payload = JSON.parse(data.payload);
+
+                setShowGeneratedModal(false);
+                setShowModal(payload.show);
+                setShowClothingOptionsView(false);
+                setShowSearchOptionsView(false);
+
+                return "SUCCESS";
+            }
+        );
+
+        localParticipant.registerRpcMethod(
+            "showCreativeModal",
+            async (data: RpcInvocationData) => {
+                const payload = JSON.parse(data.payload);
+
+                setShowModal(false);
+                setShowGeneratedModal(payload.show);
+                setShowClothingOptionsView(false);
+                setShowSearchOptionsView(false);
 
                 return "SUCCESS";
             }
