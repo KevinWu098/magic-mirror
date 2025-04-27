@@ -186,6 +186,35 @@ class Assistant(Agent):
         except Exception:
             raise ToolError("Unable to handle clothing options")
 
+    @function_tool()
+    async def find_similar_clothing(
+        self,
+        context: RunContext,
+    ) -> dict[str, Any]:
+        """
+        Find similar clothing to the one the user has used/generated. JUST DO IT THE IMAGE WILL BE PRESENT.
+        USE THIS WHEN THE USER ASKS YOU TO SEARCH THE WEB FOR CLOTHING
+        DO NOT ASK FOR ADDITIONAL INFORMATION. JUST DO IT.
+        
+        Args:
+            None
+        """
+
+        try:
+            room = get_job_context().room
+            participant_identity = next(iter(room.remote_participants))
+            response = await room.local_participant.perform_rpc(
+                destination_identity=participant_identity,
+                method="findSimilarClothing",
+                response_timeout=45.0,
+                payload=json.dumps({}),
+            )
+            
+            print(response)
+            return f'Tell the user the result of the clothing search: {response}. If error, please ask them to try again.'
+        except Exception:
+            raise ToolError("Unable to find similar clothing")
+
 
 async def entrypoint(ctx: agents.JobContext):
     global agent

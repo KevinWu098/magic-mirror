@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
     generateClothing,
     generateTryOn,
     takeCalibrationImage,
 } from "@/actions/action";
 import { generateImage } from "@/actions/image";
+import { findSimilarClothing } from "@/actions/search";
 import { ConnectionDetails } from "@/app/api/connection-details/route";
 import { Captions } from "@/components/captions";
 import { ClothingDialog } from "@/components/clothing-dialog";
@@ -38,7 +39,13 @@ import {
     RpcInvocationData,
     Track,
 } from "livekit-client";
-import { DownloadIcon, Mic2Icon, MicOffIcon, XIcon } from "lucide-react";
+import {
+    DownloadIcon,
+    Mic2Icon,
+    MicOffIcon,
+    ShirtIcon,
+    XIcon,
+} from "lucide-react";
 import { motion } from "motion/react";
 import { toast } from "sonner";
 
@@ -85,8 +92,8 @@ export function Client() {
 
     const [images, setImages] = useState<ImageItem[]>([
         {
-            src: "/dev/kevin.jpg",
-            alt: "Kevin",
+            src: "/dev/bunny.jpg",
+            alt: "Bunny",
             width: 1024,
             height: 1024,
         },
@@ -164,6 +171,8 @@ export function Client() {
                         type: "image/jpeg",
                     });
 
+                    setGarment(garmentFile);
+
                     const { maskedImage, overlaidImage, originalImage } =
                         await generateClothing(
                             garmentFile,
@@ -228,18 +237,6 @@ export function Client() {
 
                     setShowGeneratedModal(true);
 
-                    // const generateSecondImage = generateImage(
-                    //     null,
-                    //     generationRequest,
-                    //     "medium"
-                    // ).then((result) => {
-                    //     setGeneratedImage2(result.imageBase64);
-                    // });
-
-                    // Wait for both to complete before proceeding with try-on
-
-                    // console.log(generateFirstImage, generateSecondImage);
-
                     // Create File object from blob
                     const vtonFile = new File([vtonBlob], "image.jpg", {
                         type: "image/jpeg",
@@ -253,6 +250,8 @@ export function Client() {
                     const garmentFile = new File([blob], "garment.jpg", {
                         type: "image/jpeg",
                     });
+
+                    setGarment(garmentFile);
 
                     const { maskedImage, overlaidImage, originalImage } =
                         await generateClothing(
@@ -283,6 +282,29 @@ export function Client() {
                 const payload = JSON.parse(data.payload);
 
                 setShowClothingOptionsView(payload.show);
+
+                return "SUCCESS";
+            }
+        );
+
+        localParticipant.registerRpcMethod(
+            "findSimilarClothing",
+            async (data: RpcInvocationData) => {
+                console.log("GARMENT", garment);
+
+                const garmentToUse =
+                    garment ||
+                    new File(
+                        [await fetch(images[0]!.src).then((r) => r.blob())],
+                        "garment.jpg",
+                        {
+                            type: "image/jpeg",
+                        }
+                    );
+
+                const result = await findSimilarClothing(garmentToUse);
+
+                console.log(result);
 
                 return "SUCCESS";
             }
@@ -395,6 +417,7 @@ export function Client() {
                             height: 1024,
                         };
                         setImages((prevImages) => [newImage, ...prevImages]);
+                        setGarment(file);
                     };
                     reader.readAsDataURL(file);
                 }
@@ -454,6 +477,8 @@ export function Client() {
             }
         }
     };
+
+    console.log(garment);
 
     return (
         <div
@@ -521,7 +546,7 @@ export function Client() {
                                     );
                                 }}
                             >
-                                <DownloadIcon className="size-16" />
+                                <DownloadIcon className="size-16 fill-green-400 text-green-400" />
                             </Button>
                         ) : (
                             <div className="size-16" /> // Empty placeholder to maintain grid spacing
@@ -543,9 +568,12 @@ export function Client() {
                         <Button
                             variant="ghost"
                             size="icon"
-                            className="mx-auto h-fit w-fit bg-transparent text-black"
+                            className={cn(
+                                "mx-auto h-fit w-fit bg-transparent text-black",
+                                !garment && "invisible"
+                            )}
                         >
-                            <Mic2Icon className="size-16" />
+                            <ShirtIcon className="size-16 fill-green-400 text-green-400" />
                         </Button>
                     </div>
 
