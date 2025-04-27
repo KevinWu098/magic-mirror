@@ -171,7 +171,19 @@ export function Client() {
                 connectionDetailsData.serverUrl,
                 connectionDetailsData.participantToken
             );
-            await room.localParticipant.setMicrophoneEnabled(!isMuted);
+
+            // Get available audio input devices
+            const devices = await Room.getLocalDevices("audioinput");
+            console.log("devices", devices);
+            if (devices.length > 1) {
+                // Use the second microphone if available
+                await room.localParticipant.setMicrophoneEnabled(!isMuted, {
+                    deviceId: devices[0]?.deviceId,
+                });
+            } else {
+                // Fallback to default microphone
+                await room.localParticipant.setMicrophoneEnabled(!isMuted);
+            }
         }
 
         if (SHOULD_CONNECT) {
