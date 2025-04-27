@@ -1,9 +1,7 @@
-// import { LivekitClient } from "@/components/livekit-client";
-
 import { Client } from "@/components/client";
+import { MediaPipeClient } from "@/components/mediapipe-client";
 
-export default function Page() {
-    // return <LivekitClient />;
-
+export default async function Page() {
     return <Client />;
+    // return <MediaPipeClient />;
 }

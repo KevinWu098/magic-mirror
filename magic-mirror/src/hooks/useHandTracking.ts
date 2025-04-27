@@ -54,8 +54,17 @@ export function useHandTracking() {
 
         // Set up video stream
         try {
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            const videoDevices = devices.filter(
+                (device) => device.kind === "videoinput"
+            );
             const stream = await navigator.mediaDevices.getUserMedia({
-                video: { width: 720, height: 1280 },
+                video: {
+                    deviceId: videoDevices[0]?.deviceId,
+                    width: 1920,
+                    height: 1080,
+                    aspectRatio: 16 / 9,
+                },
             });
             if (videoRef.current) {
                 videoRef.current.srcObject = stream;
