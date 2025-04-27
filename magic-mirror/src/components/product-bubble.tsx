@@ -107,6 +107,8 @@ export const ProductBubble = ({
         return new Intl.NumberFormat("en-US", {
             style: "currency",
             currency: "USD",
+            minimumFractionDigits: 0,
+            maximumFractionDigits: 0
         }).format(price);
     }, [price]);
 
@@ -140,25 +142,29 @@ export const ProductBubble = ({
             style={{ boxShadow: "0 8px 24px rgba(0, 0, 0, 0.1)" }}
         >
             {/* Product Image with Fixed Size and Uniform Scaling */}
-            <div className="relative w-full h-[180px] flex items-center justify-center">
-                <div className="relative w-[180px] h-[180px]">
+            <div className="relative w-full h-[220px] flex items-center justify-center">
+                <div className="relative w-[220px] h-[220px]">
                     {processedImageUrl && (
                         <Image
                             src={processedImageUrl}
                             alt={name}
                             fill
                             className="object-contain"
-                            sizes="180px"
+                            sizes="220px"
                             priority
                         />
                     )}
                 </div>
+                
+                {/* Price Bubble */}
+                <div className="absolute bottom-0 left-8 bg-black/80 text-emerald-400 font-bold rounded-lg px-3 py-1 transform translate-x-1/4 -translate-y-1/4 shadow-md">
+                    {formattedPrice}
+                </div>
             </div>
 
             {/* Product Info */}
-            <div className="flex flex-col items-center text-center mt-4">
-                <span className="text-2xl font-bold text-gray-900">{formattedPrice}</span>
-                <span className="text-lg font-semibold text-gray-800 mt-1 line-clamp-2">{name}</span>
+            <div className="flex flex-col items-center text-center mt-1">
+                <span className="text-lg font-semibold text-gray-800 line-clamp-2">{name}</span>
             </div>
 
             {/* Website Info at Bottom */}
