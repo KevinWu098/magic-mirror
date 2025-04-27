@@ -6,8 +6,11 @@ import {
     generateTryOn,
     takeCalibrationImage,
 } from "@/actions/action";
+import { generateImage } from "@/actions/image";
 import { ConnectionDetails } from "@/app/api/connection-details/route";
 import { Captions } from "@/components/captions";
+import { ClothingDialog } from "@/components/clothing-dialog";
+import { GeneratedClothingDialog } from "@/components/generated-clothing-dialog";
 import { TranscriptionView } from "@/components/livekit/transcription-view";
 import { Button } from "@/components/ui/button";
 import {
@@ -21,6 +24,7 @@ import {
 import { MotionImage } from "@/components/ui/motion-image";
 import { useHandTracking } from "@/hooks/useHandTracking";
 import { onDeviceFailure } from "@/lib/livekit";
+import { captureAndProcessVideoFrame } from "@/lib/rpc";
 import {
     RoomAudioRenderer,
     RoomContext,
@@ -51,8 +55,12 @@ export function Client() {
     const [tryOnOriginalResult, setTryOnOriginalResult] = useState<
         string | null
     >(null);
+    const [generatedImage1, setGeneratedImage1] = useState<string | null>(null);
+    const [generatedImage2, setGeneratedImage2] = useState<string | null>(null);
 
     const [showModal, setShowModal] = useState(false);
+    const [showGeneratedModal, setShowGeneratedModal] = useState(false);
+
     const [isMuted, setIsMuted] = useState(false);
     const [showClothingOptionsView, setShowClothingOptionsView] =
         useState(false);
@@ -105,131 +113,11 @@ export function Client() {
 
     useEffect(() => {
         localParticipant.registerRpcMethod(
-            "takeCalibrationImage",
+            "tryOnClothing",
             async (data: RpcInvocationData) => {
                 try {
-                    if (!videoRef.current) {
-                        throw new RpcError(1, "Video element not found");
-                    }
-
-                    const canvas = document.createElement("canvas");
-                    // Swap width and height since we're rotating 90 degrees
-                    canvas.width = videoRef.current.videoHeight;
-                    canvas.height = videoRef.current.videoWidth;
-
-                    const ctx = canvas.getContext("2d");
-                    if (!ctx) {
-                        throw new RpcError(
-                            1,
-                            "Could not create canvas context"
-                        );
-                    }
-
-                    // Rotate 90 degrees counterclockwise
-                    ctx.translate(0, canvas.height);
-                    ctx.rotate(-Math.PI / 2);
-                    ctx.drawImage(videoRef.current, 0, 0);
-
-                    // Convert canvas to blob with scaled dimensions
-                    const blob = await new Promise<Blob>((resolve) => {
-                        const scaledCanvas = document.createElement("canvas");
-                        // Calculate width to maintain aspect ratio with height of 1024
-                        const aspectRatio = canvas.width / canvas.height;
-                        scaledCanvas.width = Math.round(1024 * aspectRatio);
-                        scaledCanvas.height = 1024;
-                        const scaledCtx = scaledCanvas.getContext("2d");
-                        if (scaledCtx) {
-                            scaledCtx.drawImage(
-                                canvas,
-                                0,
-                                0,
-                                scaledCanvas.width,
-                                scaledCanvas.height
-                            );
-                            scaledCanvas.toBlob(
-                                (blob) => {
-                                    if (blob) resolve(blob);
-                                },
-                                "image/jpeg",
-                                0.5
-                            );
-                        }
-                    });
-
-                    // Create File object from blob
-                    const file = new File([blob], "image.jpg", {
-                        type: "image/jpeg",
-                    });
-
-                    // const response = await fetch("/dev/kevin.jpg");
-                    // const blob = await response.blob();
-                    // const file = new File([blob], "kevin.jpg", {
-                    //     type: "image/jpeg",
-                    // });
-
-                    const { status } = await takeCalibrationImage(file);
-
-                    return status.toString();
-                } catch (error) {
-                    throw new RpcError(1, "Failed to capture video frame");
-                }
-            }
-        );
-
-        localParticipant.registerRpcMethod(
-            "generateClothing",
-            async (data: RpcInvocationData) => {
-                try {
-                    if (!videoRef.current) {
-                        throw new RpcError(1, "Video element not found");
-                    }
-
-                    const canvas = document.createElement("canvas");
-                    // Swap width and height since we're rotating 90 degrees
-                    canvas.width = videoRef.current.videoHeight;
-                    canvas.height = videoRef.current.videoWidth;
-
-                    const ctx = canvas.getContext("2d");
-                    if (!ctx) {
-                        throw new RpcError(
-                            1,
-                            "Could not create canvas context"
-                        );
-                    }
-
-                    // Rotate 90 degrees counterclockwise
-                    ctx.translate(0, canvas.height);
-                    ctx.rotate(-Math.PI / 2);
-                    ctx.drawImage(videoRef.current, 0, 0);
-
-                    // Convert canvas to blob with scaled dimensions and mirror the image
-                    const vtonBlob = await new Promise<Blob>((resolve) => {
-                        const scaledCanvas = document.createElement("canvas");
-                        // Calculate width to maintain aspect ratio with height of 1024
-                        const aspectRatio = canvas.width / canvas.height;
-                        scaledCanvas.width = Math.round(1024 * aspectRatio);
-                        scaledCanvas.height = 1024;
-                        const scaledCtx = scaledCanvas.getContext("2d");
-                        if (scaledCtx) {
-                            // Mirror the image horizontally
-                            scaledCtx.translate(scaledCanvas.width, 0);
-                            scaledCtx.scale(-1, 1);
-                            scaledCtx.drawImage(
-                                canvas,
-                                0,
-                                0,
-                                scaledCanvas.width,
-                                scaledCanvas.height
-                            );
-                            scaledCanvas.toBlob(
-                                (blob) => {
-                                    if (blob) resolve(blob);
-                                },
-                                "image/jpeg",
-                                0.5
-                            );
-                        }
-                    });
+                    const vtonBlob =
+                        await captureAndProcessVideoFrame(videoRef);
 
                     // Create File object from blob
                     const vtonFile = new File([vtonBlob], "image.jpg", {
@@ -255,6 +143,91 @@ export function Client() {
                     // Store the result and show modal
                     setTryOnResult(overlaidImage.toString());
                     setTryOnOriginalResult(originalImage.toString());
+                    setShowModal(true);
+
+                    return "SUCCESS";
+                } catch (error) {
+                    throw new RpcError(1, "Failed to capture video frame");
+                }
+            }
+        );
+
+        localParticipant.registerRpcMethod(
+            "tryOnCreativeClothing",
+            async (data: RpcInvocationData) => {
+                try {
+                    const payload = JSON.parse(data.payload);
+                    const generationRequest = payload.generationRequest;
+                    setGeneratedImage1(null);
+                    setGeneratedImage2(null);
+
+                    const vtonBlob =
+                        await captureAndProcessVideoFrame(videoRef);
+
+                    setShowGeneratedModal(true);
+
+                    // Generate images independently to handle them as they complete
+                    const result = await generateImage(
+                        null,
+                        generationRequest,
+                        "low"
+                    );
+                    const canvas = document.createElement("canvas");
+                    canvas.width = 768;
+                    canvas.height = 1024;
+                    const ctx = canvas.getContext("2d");
+
+                    const img = new Image();
+                    img.src = `data:image/jpeg;base64,${result.imageBase64}`;
+                    await new Promise((resolve) => {
+                        img.onload = resolve;
+                    });
+
+                    ctx?.drawImage(img, 0, 0, 768, 1024);
+                    const resizedBase64 = canvas
+                        .toDataURL("image/jpeg")
+                        .split(",")[1]!;
+                    result.imageBase64 = resizedBase64;
+                    setGeneratedImage1(result.imageBase64);
+
+                    // const generateSecondImage = generateImage(
+                    //     null,
+                    //     generationRequest,
+                    //     "medium"
+                    // ).then((result) => {
+                    //     setGeneratedImage2(result.imageBase64);
+                    // });
+
+                    // Wait for both to complete before proceeding with try-on
+
+                    // console.log(generateFirstImage, generateSecondImage);
+
+                    // Create File object from blob
+                    const vtonFile = new File([vtonBlob], "image.jpg", {
+                        type: "image/jpeg",
+                    });
+
+                    const blob = await fetch(
+                        `data:image/jpeg;base64,${resizedBase64}`
+                    ).then((res) => res.blob());
+
+                    // Create File object from blob
+                    const garmentFile = new File([blob], "garment.jpg", {
+                        type: "image/jpeg",
+                    });
+
+                    const { maskedImage, overlaidImage, originalImage } =
+                        await generateClothing(
+                            garmentFile,
+                            "Upper-body",
+                            vtonFile
+                        );
+                    console.log("SUCCESS");
+
+                    // Store the result and show modal
+                    setTryOnResult(overlaidImage.toString());
+                    setTryOnOriginalResult(originalImage.toString());
+                    setShowGeneratedModal(false);
                     setShowModal(true);
 
                     return "SUCCESS";
@@ -400,39 +373,19 @@ export function Client() {
                 <RoomAudioRenderer />
             </RoomContext.Provider>
 
-            <Dialog
-                open={showModal}
-                onOpenChange={setShowModal}
-            >
-                <DialogContent className="max-w-none sm:max-w-[calc(100vw-32rem)]">
-                    <div className="relative h-[80vh]">
-                        <motion.img
-                            initial={{ opacity: 1 }}
-                            animate={{ opacity: 1 }}
-                            transition={{
-                                delay: 1,
-                                duration: 2.5,
-                                ease: "easeInOut",
-                            }}
-                            src={`data:image/jpeg;base64,${tryOnResult}`}
-                            alt="Try-on Result"
-                            className="absolute inset-0 h-full w-full object-contain"
-                        />
-                        <motion.img
-                            initial={{ opacity: 1 }}
-                            animate={{ opacity: 0 }}
-                            transition={{
-                                delay: 1,
-                                duration: 2.5,
-                                ease: "easeInOut",
-                            }}
-                            src={`data:image/jpeg;base64,${tryOnOriginalResult}`}
-                            alt="Original Result"
-                            className="absolute inset-0 z-[100] h-full w-full object-contain"
-                        />
-                    </div>
-                </DialogContent>
-            </Dialog>
+            <ClothingDialog
+                showModal={showModal}
+                setShowModal={setShowModal}
+                tryOnResult={tryOnResult}
+                tryOnOriginalResult={tryOnOriginalResult}
+            />
+
+            <GeneratedClothingDialog
+                showModal={showGeneratedModal}
+                setShowModal={setShowGeneratedModal}
+                generatedImage1={generatedImage1}
+                generatedImage2={generatedImage2}
+            />
         </div>
     );
 }
