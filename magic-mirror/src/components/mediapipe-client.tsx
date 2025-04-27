@@ -50,19 +50,20 @@ export function MediaPipeClient() {
     };
 
     return (
-        <div className="relative h-full">
+        <div className="relative h-full max-h-full w-full max-w-full">
             <video
                 ref={videoRef}
                 className="hidden"
                 playsInline
             />
-            <canvas
-                ref={canvasRef}
-                className="h-full w-full scale-x-[-1] object-cover"
-            />
+            <div className="relative flex h-full min-h-full w-full min-w-full items-center justify-center overflow-hidden">
+                <canvas
+                    ref={canvasRef}
+                    className="h-[100vw] scale-x-[-1] rotate-90 object-cover"
+                />
+            </div>
 
-            {/* Carousel UI */}
-            <div className="absolute inset-0 flex items-center justify-center">
+            {/* <div className="absolute inset-0 flex items-center justify-center">
                 <div className="relative w-full max-w-4xl">
                     {CAROUSEL_ITEMS.map((item, index) => {
                         const position = getItemPosition(index);
@@ -83,7 +84,7 @@ export function MediaPipeClient() {
                         );
                     })}
                 </div>
-            </div>
+            </div> */}
 
             {isGrabbing && (
                 <div className="absolute top-4 left-4 rounded bg-green-500 px-4 py-2 text-white">

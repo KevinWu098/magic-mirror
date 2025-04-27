@@ -1,8 +1,9 @@
+import json
 from typing import Any
 from dotenv import load_dotenv
 
 from livekit import agents
-from livekit.agents import AgentSession, Agent, RoomInputOptions, function_tool, RunContext
+from livekit.agents import AgentSession, Agent, RoomInputOptions, function_tool, RunContext, get_job_context, ToolError
 from livekit.plugins import (
     openai,
     deepgram,
@@ -16,7 +17,16 @@ load_dotenv()
 
 class Assistant(Agent):
     def __init__(self) -> None:
-        super().__init__(instructions="You are a helpful voice AI assistant.")
+        super().__init__(
+            instructions=
+            """
+            You are a helpful assistant that can answer questions and help with tasks.
+
+            Your name is Magic Mirror. You may be referred to as the Magic Mirror, Mirror, Magic Mirror, or Magic.
+
+            When you are STOPPED, do not respond with too much text. just affirm and stop.
+            """,
+        )
         
     @function_tool()
     async def lookup_weather(
@@ -63,6 +73,35 @@ class Assistant(Agent):
         # TODO: Implement this
         return "This is not implemented. Just say that clothing was remixed."
 
+    @function_tool()
+    async def take_calibration_image(
+        self,
+        context: RunContext,
+    ) -> dict[str, Any]:
+        """Take a calibration image of the user
+        
+        Args:
+            None
+        """
+
+        try:
+            room = get_job_context().room
+            participant_identity = next(iter(room.remote_participants))
+            response = await room.local_participant.perform_rpc(
+                destination_identity=participant_identity,
+                method="takeCalibrationImage",
+                response_timeout=5.0,
+                payload=json.dumps({}),
+            )
+            
+            print(response)
+            return {"message": "Calibration image taken", "instruction": "Say the given word", "givenWord": response}
+        except Exception:
+            raise ToolError("Unable to take calibration image")
+    
+        # TODO: Implement this
+        return "This is not implemented. Just say that the image was taken (but clarify it's not implemented)."
+
 async def entrypoint(ctx: agents.JobContext):
     await ctx.connect()
 
@@ -82,9 +121,9 @@ async def entrypoint(ctx: agents.JobContext):
         ),
     )
 
-    await session.generate_reply(
-        instructions="Greet the user and offer your assistance."
-    )
+    # await session.generate_reply(
+    #     instructions="Greet the user and offer your assistance."
+    # )
 
 
 if __name__ == "__main__":
