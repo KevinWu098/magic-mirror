@@ -579,53 +579,49 @@ def infer_tryon():
     if generator is None:
         return jsonify({"error": "Model generator not initialized."}), 503
 
-    # --- Input Reading ---
-    if "garm_img" not in request.files:
-        return jsonify({"error": "Missing 'garm_img' file part"}), 400
-    if "vton_img" not in request.files:  # Needed for original size
-        return jsonify({"error": "Missing 'vton_img' file part"}), 400
-    if "mask_image" not in request.files:  # Expect mask image file
-        return jsonify({"error": "Missing 'mask_image' file part"}), 400
-    if "pose_image" not in request.files:  # Expect pose image file
-        return jsonify({"error": "Missing 'pose_image' file part"}), 400
+    # --- Input Reading (from JSON with base64) ---
+    if not request.is_json:
+        return jsonify({"error": "Request must be JSON"}), 400
 
-    garm_file = request.files["garm_img"]
-    vton_file = request.files["vton_img"]
-    mask_file = request.files["mask_image"]
-    pose_file = request.files["pose_image"]
+    data = request.get_json()
 
-    if garm_file.filename == "":
-        return jsonify({"error": "No selected file for 'garm_img'"}), 400
-    if vton_file.filename == "":
-        return jsonify({"error": "No selected file for 'vton_img'"}), 400
-    if mask_file.filename == "":
-        return jsonify({"error": "No selected file for 'mask_image'"}), 400
-    if pose_file.filename == "":
-        return jsonify({"error": "No selected file for 'pose_image'"}), 400
+    required_fields = [
+        "garm_img_base64",
+        "vton_img_base64",
+        "mask_base64",
+        "pose_base64",
+    ]
+    for field in required_fields:
+        if field not in data:
+            return jsonify({"error": f"Missing '{field}' in JSON payload"}), 400
 
     try:
-        # Read parameters from form data
-        n_steps = int(request.form.get("n_steps", 20))
-        image_scale = float(request.form.get("image_scale", 2.0))
-        seed = int(request.form.get("seed", -1))
+        # Read parameters from JSON data
+        n_steps = int(data.get("n_steps", 20))
+        image_scale = float(data.get("image_scale", 2.0))
+        seed = int(data.get("seed", -1))
         num_images_per_prompt = 1  # Keep fixed for this endpoint
-        resolution = request.form.get("resolution", "768x1024")
+        resolution = data.get("resolution", "768x1024")
         if resolution not in ["768x1024", "1152x1536", "1536x2048"]:
             return jsonify({"error": "Invalid resolution."}), 400
 
-        # Decode images from file streams
-        garm_img_pil = Image.open(garm_file.stream).convert("RGB")
-        vton_img_pil = Image.open(vton_file.stream).convert(
+        # Decode images from base64 strings
+        garm_img_pil = decode_base64_to_pil(data["garm_img_base64"]).convert("RGB")
+        # Decode vton again for original size info
+        vton_img_pil = decode_base64_to_pil(data["vton_img_base64"]).convert("RGB")
+        mask_pil = decode_base64_to_pil(data["mask_base64"]).convert(
+            "L"
+        )  # Ensure L mode for mask
+        pose_image_pil = decode_base64_to_pil(data["pose_base64"]).convert(
             "RGB"
-        )  # Read vton again for original size info
-        mask_pil = Image.open(mask_file.stream).convert("L")  # Ensure L mode for mask
-        pose_image_pil = Image.open(pose_file.stream).convert(
-            "RGB"
-        )  # Ensure RGB mode for pose
+        )  # Ensure RGB for pose
 
     except Exception as e:
-        print(f"Error processing input: {traceback.format_exc()}")
-        return jsonify({"error": f"Bad request data: {e}"}), 400
+        print(f"Error processing input or decoding base64: {traceback.format_exc()}")
+        return (
+            jsonify({"error": f"Bad request data or invalid base64 string: {e}"}),
+            400,
+        )
 
     print(f"Processing /infer request: resolution={resolution}, seed={seed}")
 
@@ -651,19 +647,20 @@ def infer_tryon():
         if result_img_pil is None:
             return jsonify({"error": "Model failed to generate an image."}), 500
 
-        # --- Encode and send result ---
-        img_io = io.BytesIO()
-        result_img_pil.save(img_io, "PNG")
-        img_io.seek(0)
+        # --- Encode result to base64 and send JSON response ---
+        encode_start = time.time()
+        result_base64 = encode_pil_to_base64(result_img_pil, format="PNG")
+        encode_end = time.time()
+        print(
+            f"Time - Encoding Result to Base64: {encode_end - encode_start:.2f} seconds"
+        )
 
         request_end_time = time.time()
         print(
             f"Time - Total /infer Request: {request_end_time - request_start_time:.2f} seconds"
         )
         print(f"--- /infer Request Completed ---")
-        return send_file(
-            img_io, mimetype="image/png", download_name="generated_tryon.png"
-        )
+        return jsonify({"result_image_base64": result_base64})
 
     except Exception as e:
         print(f"Error during inference: {traceback.format_exc()}")
@@ -683,44 +680,45 @@ def generate_tryon():
     if generator is None:
         return jsonify({"error": "Model generator not initialized."}), 503
 
-    # --- Input Reading (Combined) ---
-    if "vton_img" not in request.files:
-        return jsonify({"error": "Missing 'vton_img' file part"}), 400
-    if "garm_img" not in request.files:
-        return jsonify({"error": "Missing 'garm_img' file part"}), 400
-    if "category" not in request.form:
-        return jsonify({"error": "Missing 'category' form field"}), 400
+    # --- Input Reading (from JSON with base64) ---
+    if not request.is_json:
+        return jsonify({"error": "Request must be JSON"}), 400
 
-    vton_file = request.files["vton_img"]
-    garm_file = request.files["garm_img"]
-    if vton_file.filename == "":
-        return jsonify({"error": "No selected file for 'vton_img'"}), 400
-    if garm_file.filename == "":
-        return jsonify({"error": "No selected file for 'garm_img'"}), 400
+    data = request.get_json()
+
+    required_fields = ["vton_img_base64", "garm_img_base64", "category"]
+    for field in required_fields:
+        if field not in data:
+            return jsonify({"error": f"Missing '{field}' in JSON payload"}), 400
 
     try:
-        category = request.form["category"]
+        category = data["category"]
         if category not in ["Upper-body", "Lower-body", "Dresses"]:
             return jsonify({"error": "Invalid category."}), 400
 
-        offset_top = int(request.form.get("offset_top", 0))
-        offset_bottom = int(request.form.get("offset_bottom", 0))
-        offset_left = int(request.form.get("offset_left", 0))
-        offset_right = int(request.form.get("offset_right", 0))
-        n_steps = int(request.form.get("n_steps", 20))
-        image_scale = float(request.form.get("image_scale", 2.0))
-        seed = int(request.form.get("seed", -1))
+        # Read optional parameters from JSON data
+        offset_top = int(data.get("offset_top", 0))
+        offset_bottom = int(data.get("offset_bottom", 0))
+        offset_left = int(data.get("offset_left", 0))
+        offset_right = int(data.get("offset_right", 0))
+        n_steps = int(data.get("n_steps", 20))
+        image_scale = float(data.get("image_scale", 2.0))
+        seed = int(data.get("seed", -1))
         num_images_per_prompt = 1  # Keep fixed
-        resolution = request.form.get("resolution", "768x1024")
+        resolution = data.get("resolution", "768x1024")
         if resolution not in ["768x1024", "1152x1536", "1536x2048"]:
             return jsonify({"error": "Invalid resolution."}), 400
 
-        vton_img_pil = Image.open(vton_file.stream).convert("RGB")
-        garm_img_pil = Image.open(garm_file.stream).convert("RGB")
+        # Decode images from base64 strings
+        vton_img_pil = decode_base64_to_pil(data["vton_img_base64"]).convert("RGB")
+        garm_img_pil = decode_base64_to_pil(data["garm_img_base64"]).convert("RGB")
 
     except Exception as e:
-        print(f"Error processing input: {traceback.format_exc()}")
-        return jsonify({"error": f"Bad request data: {e}"}), 400
+        print(f"Error processing input or decoding base64: {traceback.format_exc()}")
+        return (
+            jsonify({"error": f"Bad request data or invalid base64 string: {e}"}),
+            400,
+        )
 
     print(
         f"Processing /generate request: category={category}, resolution={resolution}, seed={seed}"
@@ -770,19 +768,20 @@ def generate_tryon():
         if result_img_pil is None:
             return jsonify({"error": "Model failed to generate an image."}), 500
 
-        # --- Encode and send result ---
-        img_io = io.BytesIO()
-        result_img_pil.save(img_io, "PNG")
-        img_io.seek(0)
+        # --- Encode result to base64 and send JSON response ---
+        encode_start = time.time()
+        result_base64 = encode_pil_to_base64(result_img_pil, format="PNG")
+        encode_end = time.time()
+        print(
+            f"Time - Encoding Result to Base64: {encode_end - encode_start:.2f} seconds"
+        )
 
         request_end_time = time.time()
         print(
             f"Time - Total /generate Request: {request_end_time - request_start_time:.2f} seconds"
         )
         print(f"--- /generate Request Completed ---")
-        return send_file(
-            img_io, mimetype="image/png", download_name="generated_tryon.png"
-        )
+        return jsonify({"result_image_base64": result_base64})
 
     except Exception as e:
         print(f"Error during inference: {traceback.format_exc()}")
