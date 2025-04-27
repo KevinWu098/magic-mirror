@@ -2,3 +2,4 @@ cv/Anaconda Prompt for magicmirror cv thingy.lnk
 cv/yolo11x-seg.pt
 .venv
 .env*
+cv/google_lens_result.json
