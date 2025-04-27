@@ -1,5 +1,4 @@
-import flask
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 import os
 import io
@@ -7,16 +6,16 @@ import sys
 from PIL import Image
 import numpy as np
 import torch
-import torch.nn as nn
 import random
 import traceback
 import time
 import math
 import base64
-import zipfile
 import threading
 import concurrent.futures
 from transformers import CLIPVisionModelWithProjection
+from ultralytics import FastSAM, YOLO
+import cv2
 
 # --- Configuration ---
 MODEL_PATH = "/workspace/FitDiT/local_model_dir"
@@ -258,6 +257,31 @@ class FitDiTGenerator:
         self.parsing_model = Parsing(model_root=model_root, device=preprocessor_device)
         print("Preprocessors loaded.")
 
+        # --- Load Segmentation Models ---
+        segmentation_model_device = self.device  # Or choose 'cpu' if needed
+        print(f"  Loading YOLO model to {segmentation_model_device}...")
+        try:
+            # Using yolov8n (nano) for potentially faster inference
+            self.yolo_model = YOLO("yolov8n.pt")
+            # Move model to device if applicable (YOLO handles device internally during call)
+            # self.yolo_model.to(segmentation_model_device) # YOLO handles this
+            print("  YOLO model loaded.")
+        except Exception as e:
+            print(f"Error loading YOLO model: {e}. Segmentation will be skipped.")
+            self.yolo_model = None
+
+        print(f"  Loading FastSAM model to {segmentation_model_device}...")
+        try:
+            # Using FastSAM-x (large) - consider smaller if needed
+            self.sam_model = FastSAM("FastSAM-x.pt")
+            # Move model to device if applicable (FastSAM handles device internally during call)
+            # self.sam_model.to(segmentation_model_device) # FastSAM handles this
+            print("  FastSAM model loaded.")
+        except Exception as e:
+            print(f"Error loading FastSAM model: {e}. Segmentation will be skipped.")
+            self.sam_model = None
+        # --- End Load Segmentation Models ---
+
         # Setup offloading or move pipeline to device
         if offload:
             print("Enabling standard model CPU offload.")
@@ -454,6 +478,117 @@ class FitDiTGenerator:
             )
 
             return result_img_pil
+
+    # --- New Segmentation Method ---
+    def _segment_person(self, vton_img_pil: Image.Image) -> Image.Image:
+        """Segments the largest person from the input image and places them on a white background."""
+        if not self.yolo_model or not self.sam_model:
+            print("Warning: YOLO or FastSAM model not loaded. Skipping segmentation.")
+            return vton_img_pil
+
+        print("Starting person segmentation...")
+        seg_start_time = time.time()
+
+        try:
+            # 1. Convert PIL (RGB) to OpenCV (BGR)
+            vton_img_cv = cv2.cvtColor(np.array(vton_img_pil), cv2.COLOR_RGB2BGR)
+            h_orig, w_orig = vton_img_cv.shape[:2]
+
+            # 2. Run YOLO detection
+            print("  Running YOLO detection...")
+            yolo_start = time.time()
+            # Use the device specified during initialization implicitly
+            yolo_results = self.yolo_model(
+                vton_img_cv, device=self.device, verbose=False
+            )
+            yolo_end = time.time()
+            print(f"    YOLO detection time: {yolo_end - yolo_start:.2f}s")
+
+            # 3. Find the largest 'person' bounding box
+            largest_person_box = None
+            max_area = 0
+            person_boxes = []
+            if yolo_results and len(yolo_results) > 0:
+                boxes = yolo_results[0].boxes
+                for box in boxes:
+                    cls = int(box.cls[0])
+                    if cls == 0:  # Class 0 is 'person'
+                        xyxy_box = box.xyxy[0].cpu().numpy()
+                        x1, y1, x2, y2 = map(int, xyxy_box)
+                        # Basic sanity check for box size
+                        if x2 > x1 and y2 > y1:
+                            area = (x2 - x1) * (y2 - y1)
+                            if area > max_area:
+                                max_area = area
+                                largest_person_box = [x1, y1, x2, y2]
+                                person_boxes.append(largest_person_box)
+
+            if not largest_person_box:
+                print("  No persons detected by YOLO. Skipping segmentation.")
+                return vton_img_pil
+
+            print(f"  Found largest person box: {largest_person_box}")
+
+            # 4. Run FastSAM segmentation using BBox Prompt
+            print("  Running FastSAM segmentation...")
+            sam_start = time.time()
+            # Use the device specified during initialization implicitly
+            sam_results = self.sam_model(
+                vton_img_cv,  # Pass the OpenCV image
+                device=self.device,
+                retina_masks=True,
+                conf=0.4,
+                iou=0.9,
+                bboxes=[largest_person_box],
+                verbose=False,
+            )
+            sam_end = time.time()
+            print(f"    FastSAM segmentation time: {sam_end - sam_start:.2f}s")
+
+            # 5. Process FastSAM results and apply mask
+            if (
+                sam_results
+                and len(sam_results) > 0
+                and sam_results[0].masks is not None
+            ):
+                print("  FastSAM processing successful. Applying mask...")
+                # Get the first mask (corresponding to the bbox prompt)
+                mask_data = sam_results[0].masks.data[0]
+                mask_np = mask_data.cpu().numpy().astype(np.uint8)
+
+                # Resize mask to original image size
+                mask_resized = cv2.resize(
+                    mask_np, (w_orig, h_orig), interpolation=cv2.INTER_NEAREST
+                )
+                mask_bool = mask_resized.astype(bool)
+
+                # Create white background
+                white_bg = np.ones_like(vton_img_cv, dtype=np.uint8) * 255
+
+                # Combine using the mask (select from original where mask is True, else white)
+                segmented_img_cv = np.where(mask_bool[..., None], vton_img_cv, white_bg)
+
+                # Convert result back to PIL (BGR -> RGB)
+                segmented_img_pil = Image.fromarray(
+                    cv2.cvtColor(segmented_img_cv, cv2.COLOR_BGR2RGB)
+                )
+                seg_end_time = time.time()
+                print(
+                    f"Segmentation finished in {seg_end_time - seg_start_time:.2f} seconds."
+                )
+                return segmented_img_pil
+            else:
+                print(
+                    "  FastSAM did not produce results for the prompted bounding box. Skipping segmentation."
+                )
+                return vton_img_pil
+
+        except Exception as e:
+            print(f"Error during segmentation: {traceback.format_exc()}")
+            print("  Segmentation failed. Returning original image.")
+            return vton_img_pil
+
+    # --- End New Segmentation Method ---
 
 
 # --- Instantiate the generator ---
@@ -769,8 +904,12 @@ def generate_tryon():
 
     try:
         # Decode images
-        vton_img_pil = decode_base64_to_pil(data["vton_img_base64"]).convert("RGB")
+        vton_img_pil_orig = decode_base64_to_pil(data["vton_img_base64"]).convert("RGB")
         garm_img_pil = decode_base64_to_pil(data["garm_img_base64"]).convert("RGB")
+
+        # --- Add Segmentation Step ---
+        vton_img_pil = generator._segment_person(vton_img_pil_orig)
+        # --- End Segmentation Step ---
 
         # Read optional preprocessing offsets (though less critical here)
         offset_top = int(data.get("offset_top", 0))
