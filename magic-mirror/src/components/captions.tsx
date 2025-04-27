@@ -19,8 +19,8 @@ export const Captions = ({
     if (!latest) return null;
 
     return (
-        <div className="pointer-events-none fixed bottom-0 left-0 z-[100] flex w-full flex-col items-center">
-            <div className="mb-4 flex w-[90vw] flex-col gap-4 rounded-xl bg-black/70 px-8 py-6 shadow-lg backdrop-blur-sm">
+        <div className="pointer-events-none fixed top-50 left-0 z-[100] flex w-full flex-col items-center">
+            <div className="mb-4 flex w-[90vw] flex-col gap-4 rounded-xl bg-black/30 px-8 py-6 shadow-lg backdrop-blur-sm">
                 {latest.role === "assistant" && (
                     <div className="line-clamp-3 text-center text-6xl font-semibold text-ellipsis text-blue-200">
                         {latest.text}
