@@ -1,11 +1,23 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { takeCalibrationImage } from "@/actions";
+import {
+    generateClothing,
+    generateTryOn,
+    takeCalibrationImage,
+} from "@/actions/action";
 import { ConnectionDetails } from "@/app/api/connection-details/route";
 import { Captions } from "@/components/captions";
 import { TranscriptionView } from "@/components/livekit/transcription-view";
 import { Button } from "@/components/ui/button";
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogHeader,
+    DialogTitle,
+    DialogTrigger,
+} from "@/components/ui/dialog";
 import { useHandTracking } from "@/hooks/useHandTracking";
 import { onDeviceFailure } from "@/lib/livekit";
 import {
@@ -20,7 +32,7 @@ import {
     RpcInvocationData,
     Track,
 } from "livekit-client";
-import { Mic2Icon, MicOffIcon } from "lucide-react";
+import { Mic2Icon, MicOffIcon, XIcon } from "lucide-react";
 
 // Message type
 interface Message {
@@ -33,11 +45,21 @@ export function Client() {
         useHandTracking();
 
     const [room] = useState(new Room());
-    const [isMuted, setIsMuted] = useState(true);
+    const [tryOnResult, setTryOnResult] = useState<string | null>(null);
+    const [showModal, setShowModal] = useState(false);
+    const [isMuted, setIsMuted] = useState(false);
 
     // New state for captions
     const [messages, setMessages] = useState<Message[]>([]);
     const [userIsFinal, setUserIsFinal] = useState<boolean>(true);
+
+    const [garment, setGarment] = useState<File | null>(null);
+
+    const toggleMute = async () => {
+        const newMuteState = !isMuted;
+        setIsMuted(newMuteState);
+        await room.localParticipant.setMicrophoneEnabled(!newMuteState);
+    };
 
     useEffect(() => {
         async function connect() {
@@ -54,7 +76,7 @@ export function Client() {
                 connectionDetailsData.serverUrl,
                 connectionDetailsData.participantToken
             );
-            await room.localParticipant.setMicrophoneEnabled(true);
+            await room.localParticipant.setMicrophoneEnabled(!isMuted);
         }
 
         connect();
@@ -82,8 +104,9 @@ export function Client() {
                     }
 
                     const canvas = document.createElement("canvas");
-                    canvas.width = videoRef.current.videoWidth;
-                    canvas.height = videoRef.current.videoHeight;
+                    // Swap width and height since we're rotating 90 degrees
+                    canvas.width = videoRef.current.videoHeight;
+                    canvas.height = videoRef.current.videoWidth;
 
                     const ctx = canvas.getContext("2d");
                     if (!ctx) {
@@ -92,29 +115,136 @@ export function Client() {
                             "Could not create canvas context"
                         );
                     }
+
+                    // Rotate 90 degrees counterclockwise
+                    ctx.translate(0, canvas.height);
+                    ctx.rotate(-Math.PI / 2);
                     ctx.drawImage(videoRef.current, 0, 0);
 
-                    // Convert canvas to blob
+                    // Convert canvas to blob with scaled dimensions
                     const blob = await new Promise<Blob>((resolve) => {
-                        canvas.toBlob(
-                            (blob) => {
-                                if (blob) resolve(blob);
-                            },
-                            "image/jpeg",
-                            0.5
-                        );
+                        const scaledCanvas = document.createElement("canvas");
+                        // Calculate width to maintain aspect ratio with height of 1024
+                        const aspectRatio = canvas.width / canvas.height;
+                        scaledCanvas.width = Math.round(1024 * aspectRatio);
+                        scaledCanvas.height = 1024;
+                        const scaledCtx = scaledCanvas.getContext("2d");
+                        if (scaledCtx) {
+                            scaledCtx.drawImage(
+                                canvas,
+                                0,
+                                0,
+                                scaledCanvas.width,
+                                scaledCanvas.height
+                            );
+                            scaledCanvas.toBlob(
+                                (blob) => {
+                                    if (blob) resolve(blob);
+                                },
+                                "image/jpeg",
+                                0.5
+                            );
+                        }
                     });
 
                     // Create File object from blob
-                    const file = new File([blob], "calibration.jpg", {
+                    const file = new File([blob], "image.jpg", {
                         type: "image/jpeg",
                     });
 
-                    const { success } = await takeCalibrationImage(file, {
-                        category: "Upper-body",
+                    // const response = await fetch("/dev/kevin.jpg");
+                    // const blob = await response.blob();
+                    // const file = new File([blob], "kevin.jpg", {
+                    //     type: "image/jpeg",
+                    // });
+
+                    const { status } = await takeCalibrationImage(file);
+
+                    return status.toString();
+                } catch (error) {
+                    throw new RpcError(1, "Failed to capture video frame");
+                }
+            }
+        );
+
+        localParticipant.registerRpcMethod(
+            "generateClothing",
+            async (data: RpcInvocationData) => {
+                try {
+                    if (!videoRef.current) {
+                        throw new RpcError(1, "Video element not found");
+                    }
+
+                    const canvas = document.createElement("canvas");
+                    // Swap width and height since we're rotating 90 degrees
+                    canvas.width = videoRef.current.videoHeight;
+                    canvas.height = videoRef.current.videoWidth;
+
+                    const ctx = canvas.getContext("2d");
+                    if (!ctx) {
+                        throw new RpcError(
+                            1,
+                            "Could not create canvas context"
+                        );
+                    }
+
+                    // Rotate 90 degrees counterclockwise
+                    ctx.translate(0, canvas.height);
+                    ctx.rotate(-Math.PI / 2);
+                    ctx.drawImage(videoRef.current, 0, 0);
+
+                    // Convert canvas to blob with scaled dimensions
+                    const vtonBlob = await new Promise<Blob>((resolve) => {
+                        const scaledCanvas = document.createElement("canvas");
+                        // Calculate width to maintain aspect ratio with height of 1024
+                        const aspectRatio = canvas.width / canvas.height;
+                        scaledCanvas.width = Math.round(1024 * aspectRatio);
+                        scaledCanvas.height = 1024;
+                        const scaledCtx = scaledCanvas.getContext("2d");
+                        if (scaledCtx) {
+                            scaledCtx.drawImage(
+                                canvas,
+                                0,
+                                0,
+                                scaledCanvas.width,
+                                scaledCanvas.height
+                            );
+                            scaledCanvas.toBlob(
+                                (blob) => {
+                                    if (blob) resolve(blob);
+                                },
+                                "image/jpeg",
+                                0.5
+                            );
+                        }
                     });
 
-                    return success.toString();
+                    // Create File object from blob
+                    const vtonFile = new File([vtonBlob], "image.jpg", {
+                        type: "image/jpeg",
+                    });
+
+                    const response = await fetch("/dev/garment.jpg");
+                    const blob = await response.blob();
+
+                    // Create File object from blob
+                    const garmentFile = new File([blob], "garment.jpg", {
+                        type: "image/jpeg",
+                    });
+
+                    const { result } = await generateClothing(
+                        garmentFile,
+                        "Dresses",
+                        vtonFile
+                    );
+                    console.log(result.toString());
+                    console.log("SUCCESS");
+
+                    // Store the result and show modal
+                    setTryOnResult(result.toString());
+                    setShowModal(true);
+
+                    return "SUCCESS";
                 } catch (error) {
                     throw new RpcError(1, "Failed to capture video frame");
                 }
@@ -146,12 +276,6 @@ export function Client() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    const toggleMute = async () => {
-        const newMuteState = !isMuted;
-        await room.localParticipant.setMicrophoneEnabled(!newMuteState);
-        setIsMuted(newMuteState);
-    };
-
     return (
         <div className="lk-room-container relative mx-auto h-full max-h-full w-full max-w-full overflow-hidden">
             <RoomContext.Provider value={room}>
@@ -172,7 +296,7 @@ export function Client() {
                         {isMuted ? "Muted" : "Unmuted"}
                     </div>
 
-                    <div className="absolute right-4 bottom-4 -translate-x-1/2">
+                    <div className="absolute top-4 left-4 -translate-x-1/2">
                         <Button
                             variant="ghost"
                             size="icon"
@@ -180,9 +304,9 @@ export function Client() {
                             className="z-20 h-fit w-fit bg-transparent text-black"
                         >
                             {isMuted ? (
-                                <MicOffIcon className="size-20" />
+                                <MicOffIcon className="size-24" />
                             ) : (
-                                <Mic2Icon className="size-20" />
+                                <Mic2Icon className="size-24" />
                             )}
                         </Button>
                     </div>
@@ -195,6 +319,19 @@ export function Client() {
                 </div>
                 <RoomAudioRenderer />
             </RoomContext.Provider>
+
+            <Dialog
+                open={showModal}
+                onOpenChange={setShowModal}
+            >
+                <DialogContent className="max-w-none sm:max-w-[calc(100vw-32rem)]">
+                    <img
+                        src={`data:image/jpeg;base64,${tryOnResult}`}
+                        alt="Try-on Result"
+                        className="h-[80vh]"
+                    />
+                </DialogContent>
+            </Dialog>
         </div>
     );
 }
