@@ -94,6 +94,7 @@ class Assistant(Agent):
     @function_tool()
     async def try_on_standard_clothing(
         self,
+        body_part: str,
         context: RunContext,
     ) -> dict[str, Any]:
         """
@@ -104,7 +105,7 @@ class Assistant(Agent):
          - BLUE T SHIRT.
         
         Args:
-            None
+            body_part: The body part that the clothing item is for. Can be "Upper-body", "Lower-body", or "Full-body".
         """
 
         try:
@@ -118,7 +119,7 @@ class Assistant(Agent):
                 destination_identity=participant_identity,
                 method="tryOnClothing",
                 response_timeout=15.0,
-                payload=json.dumps({}),
+                payload=json.dumps({"body_part": body_part}),
             )
             
             print(response)
@@ -129,6 +130,7 @@ class Assistant(Agent):
     @function_tool()
     async def create_try_on_clothing(
         self,
+        body_part: str,
         generationRequest: str,
         context: RunContext,
     ) -> dict[str, Any]:
@@ -138,6 +140,7 @@ class Assistant(Agent):
         
         Args:
             generationRequest: The request for what the clothing generated should be. The image should consist of only the garment on a white background. ALWAYS ALWAYS SPECIFY IN THE REQUEST THAT THE BACKGROUND SHOULD BE COMPLETELY WHITE. ALSO SPECIFY THAT YOU SHOULD ONLY GENERATE THE CLOTHING ITEM WITHOUT A MODEL WEARING THE CLOTHING.
+            body_part: The body part that the clothing item is for. Can be "Upper-body", "Lower-body", or "Full-body".
         """
 
         try:
@@ -151,7 +154,7 @@ class Assistant(Agent):
                 destination_identity=participant_identity,
                 method="tryOnCreativeClothing",
                 response_timeout=60.0,
-                payload=json.dumps({"generationRequest": generationRequest}),
+                payload=json.dumps({"body_part": body_part, "generationRequest": generationRequest}),
             )
             
             print(response)
@@ -185,6 +188,87 @@ class Assistant(Agent):
             return f'Tell the user the result of the clothing handling: {response}. If error, please ask them to try again.'
         except Exception:
             raise ToolError("Unable to handle clothing options")
+    
+    @function_tool()
+    async def handle_standard_modal(
+        self,
+        show: bool,
+        context: RunContext,
+    ) -> dict[str, Any]:
+        """Show or hide (handle) the standard modal on the frontend
+        
+        Args:
+            show: Whether to show or hide the standard modal
+        """
+
+        try:
+            room = get_job_context().room
+            participant_identity = next(iter(room.remote_participants))
+            response = await room.local_participant.perform_rpc(
+                destination_identity=participant_identity,
+                method="showStandardModal",
+                response_timeout=5.0,
+                payload=json.dumps({"show": show}),
+            )
+            
+            print(response)
+            return f'Tell the user the result of the standard modal handling: {response}. If error, please ask them to try again.'
+        except Exception:
+            raise ToolError("Unable to handle standard modal")
+   
+    @function_tool()
+    async def handle_creative_modal(
+        self,
+        show: bool,
+        context: RunContext,
+    ) -> dict[str, Any]:
+        """Show or hide (handle) the creative modal on the frontend
+        
+        Args:
+            show: Whether to show or hide the creative modal
+        """
+
+        try:
+            room = get_job_context().room
+            participant_identity = next(iter(room.remote_participants))
+            response = await room.local_participant.perform_rpc(
+                destination_identity=participant_identity,
+                method="showCreativeModal",
+                response_timeout=5.0,
+                payload=json.dumps({"show": show}),
+            )
+            
+            print(response)
+            return f'Tell the user the result of the creative modal handling: {response}. If error, please ask them to try again.'
+        except Exception:
+            raise ToolError("Unable to handle creative modal")
+
+    @function_tool()
+    async def handle_search_options(
+        self,
+        show: bool,
+        context: RunContext,
+    ) -> dict[str, Any]:
+        """Show or hide (handle) the displayed search options on the frontend
+        
+        Args:
+            show: Whether to show or hide the search options
+        """
+
+        try:
+            room = get_job_context().room
+            participant_identity = next(iter(room.remote_participants))
+            response = await room.local_participant.perform_rpc(
+                destination_identity=participant_identity,
+                method="showSearchOptions",
+                response_timeout=5.0,
+                payload=json.dumps({"show": show}),
+            )
+            
+            print(response)
+            return f'Tell the user the result of the search handling: {response}. If error, please ask them to try again.'
+        except Exception:
+            raise ToolError("Unable to handle search options")
 
     @function_tool()
     async def find_similar_clothing(
@@ -203,6 +287,10 @@ class Assistant(Agent):
         try:
             room = get_job_context().room
             participant_identity = next(iter(room.remote_participants))
+            
+            global session
+            await session.say("Searching the web for similar clothing...")
+            
             response = await room.local_participant.perform_rpc(
                 destination_identity=participant_identity,
                 method="findSimilarClothing",

@@ -116,9 +116,11 @@ export function Client() {
     const [showGeneratedModal, setShowGeneratedModal] = useState(false);
 
     const [isMuted, setIsMuted] = useState(false);
+    const [isVideoLoaded, setIsVideoLoaded] = useState(false);
+
     const [showClothingOptionsView, setShowClothingOptionsView] =
         useState(false);
-    const [isVideoLoaded, setIsVideoLoaded] = useState(false);
+    const [showSearchOptionsView, setShowSearchOptionsView] = useState(false);
 
     // New state for captions
     const [messages, setMessages] = useState<Message[]>([]);
@@ -144,8 +146,6 @@ export function Client() {
     const [similarClothingItems, setSimilarClothingItems] = useState<
         SimilarClothingItem[]
     >([]);
-    const [showSimilarClothingView, setShowSimilarClothingView] =
-        useState(false);
 
     const toggleMute = async () => {
         const newMuteState = !isMuted;
@@ -171,7 +171,19 @@ export function Client() {
                 connectionDetailsData.serverUrl,
                 connectionDetailsData.participantToken
             );
-            await room.localParticipant.setMicrophoneEnabled(!isMuted);
+
+            // Get available audio input devices
+            const devices = await Room.getLocalDevices("audioinput");
+            console.log("devices", devices);
+            if (devices.length > 1) {
+                // Use the second microphone if available
+                await room.localParticipant.setMicrophoneEnabled(!isMuted, {
+                    deviceId: devices[0]?.deviceId,
+                });
+            } else {
+                // Fallback to default microphone
+                await room.localParticipant.setMicrophoneEnabled(!isMuted);
+            }
         }
 
         if (SHOULD_CONNECT) {
@@ -196,7 +208,13 @@ export function Client() {
             "tryOnClothing",
             async (data: RpcInvocationData) => {
                 try {
+                    const payload = JSON.parse(data.payload);
+                    const bodyPart = payload.body_part;
+
                     setLoading(true);
+                    setShowModal(false);
+                    setShowGeneratedModal(false);
+
                     const vtonBlob =
                         await captureAndProcessVideoFrame(videoRef);
 
@@ -216,11 +234,7 @@ export function Client() {
                     setGarment(garmentFile);
 
                     const { maskedImage, overlaidImage, originalImage } =
-                        await generateClothing(
-                            garmentFile,
-                            "Upper-body",
-                            vtonFile
-                        );
+                        await generateClothing(garmentFile, bodyPart, vtonFile);
                     console.log("SUCCESS");
 
                     // Store the result and show modal
@@ -242,9 +256,12 @@ export function Client() {
             async (data: RpcInvocationData) => {
                 try {
                     setLoading(true);
+                    setShowModal(false);
+                    setShowGeneratedModal(false);
 
                     const payload = JSON.parse(data.payload);
                     const generationRequest = payload.generationRequest;
+                    const bodyPart = payload.body_part;
                     setGeneratedImage1(null);
                     setGeneratedImage2(null);
 
@@ -296,11 +313,7 @@ export function Client() {
                     setGarment(garmentFile);
 
                     const { maskedImage, overlaidImage, originalImage } =
-                        await generateClothing(
-                            garmentFile,
-                            "Upper-body",
-                            vtonFile
-                        );
+                        await generateClothing(garmentFile, bodyPart, vtonFile);
                     console.log("SUCCESS");
 
                     // Store the result and show modal
@@ -323,7 +336,48 @@ export function Client() {
             async (data: RpcInvocationData) => {
                 const payload = JSON.parse(data.payload);
 
+                setShowSearchOptionsView(false);
                 setShowClothingOptionsView(payload.show);
+
+                return "SUCCESS";
+            }
+        );
+
+        localParticipant.registerRpcMethod(
+            "showStandardModal",
+            async (data: RpcInvocationData) => {
+                const payload = JSON.parse(data.payload);
+
+                setShowGeneratedModal(false);
+                setShowModal(payload.show);
+                setShowClothingOptionsView(false);
+                setShowSearchOptionsView(false);
+
+                return "SUCCESS";
+            }
+        );
+
+        localParticipant.registerRpcMethod(
+            "showCreativeModal",
+            async (data: RpcInvocationData) => {
+                const payload = JSON.parse(data.payload);
+
+                setShowModal(false);
+                setShowGeneratedModal(payload.show);
+                setShowClothingOptionsView(false);
+                setShowSearchOptionsView(false);
+
+                return "SUCCESS";
+            }
+        );
+
+        localParticipant.registerRpcMethod(
+            "showSearchOptions",
+            async (data: RpcInvocationData) => {
+                const payload = JSON.parse(data.payload);
+
+                setShowClothingOptionsView(false);
+                setShowSearchOptionsView(payload.show);
 
                 return "SUCCESS";
             }
@@ -334,6 +388,8 @@ export function Client() {
             async (data: RpcInvocationData) => {
                 console.log("GARMENT", garment);
 
+                setLoading(true);
+
                 const garmentToUse =
                     garment ||
                     new File(
@@ -343,6 +399,8 @@ export function Client() {
                             type: "image/jpeg",
                         }
                     );
+
+                console.log("garmenttouse", garmentToUse);
 
                 const result: SimilarClothingResult =
                     await findSimilarClothing(garmentToUse);
@@ -365,8 +423,12 @@ export function Client() {
                         websiteIcon: product.source_icon,
                     }));
 
+                console.log(transformedProducts);
+
                 setSimilarClothingItems(transformedProducts);
-                setShowSimilarClothingView(true);
+                setShowSearchOptionsView(true);
+
+                setLoading(false);
 
                 return "SUCCESS";
             }
@@ -541,6 +603,7 @@ export function Client() {
     };
 
     console.log(garment);
+    console.log(showSearchOptionsView);
 
     return (
         <div
@@ -661,7 +724,7 @@ export function Client() {
                     />
 
                     {showClothingOptionsView && <MotionImage images={images} />}
-                    {showSimilarClothingView && (
+                    {showSearchOptionsView && (
                         <div className="absolute bottom-32 grid w-full grid-cols-3 gap-8 px-40">
                             {similarClothingItems.map((item, index) => (
                                 <motion.div

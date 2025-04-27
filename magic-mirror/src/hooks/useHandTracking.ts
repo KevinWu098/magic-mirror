@@ -101,7 +101,7 @@ export function useHandTracking() {
                 const results = landmarker.detectForVideo(video, startTimeMs);
 
                 processResults(results, canvas.width, canvas.height);
-                drawResults(results, drawingUtils);
+                // drawResults(results, drawingUtils);
             }
 
             requestAnimationFrame(processFrame);
