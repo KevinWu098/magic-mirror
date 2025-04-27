@@ -1,5 +1,6 @@
 import flask
 from flask import Flask, request, jsonify, send_file
+from flask_cors import CORS
 import os
 import io
 import sys
@@ -55,6 +56,7 @@ except ImportError as e:
     CLIPVisionModelWithProjection = None
 
 app = Flask(__name__)
+CORS(app)
 
 # --- Global Storage for Preprocessed Data ---
 preprocessed_data = {
