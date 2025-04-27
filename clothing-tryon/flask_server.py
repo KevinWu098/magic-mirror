@@ -3,7 +3,7 @@ from flask_cors import CORS
 import os
 import io
 import sys
-from PIL import Image
+from PIL import Image, ImageDraw, ImageColor
 import numpy as np
 import torch
 import random
@@ -26,6 +26,7 @@ DEVICE = "cuda:0"
 OFFLOAD = False
 AGGRESSIVE_OFFLOAD = False
 WITH_FP16 = True
+GEMINI_MODEL_NAME = "gemini-1.5-flash-001"
 
 # Load environment variables from 'env' file
 load_dotenv(dotenv_path="env")
@@ -36,8 +37,6 @@ if not zyla_api_key:
     print(
         "Warning: ZYLA_GOOGLE_LENS_API_KEY not found in env file. /search-lens endpoint will likely fail."
     )
-    # Optionally raise an error if the key is critical for server startup
-    # raise ValueError("API key not found. Make sure ZYLA_GOOGLE_LENS_API_KEY is set in env file")
 
 # Get Public Base URL for constructing accessible image URLs
 public_base_url = os.getenv("PUBLIC_BASE_URL")
@@ -45,15 +44,11 @@ if not public_base_url:
     print(
         "Warning: PUBLIC_BASE_URL not found in env file. /search-lens endpoint will fail if requires external access."
     )
-    # You might want to raise an error here if this URL is absolutely required:
-    # raise ValueError("PUBLIC_BASE_URL must be set in env file for /search-lens to function correctly.")
 
 try:
     current_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(current_dir)
-    # server_dir = os.path.join(project_root, "server") # No longer needed
     sys.path.insert(0, project_root)
-    # sys.path.insert(0, server_dir) # No longer needed
 
     # Import necessary components directly
     from preprocess.humanparsing.run_parsing import Parsing
@@ -68,11 +63,26 @@ try:
         SD3Transformer2DModel as SD3Transformer2DModel_Vton,
     )
 
-    # Import the Zyla Google Lens function - REMOVED
-    # from zyla_google_lens import search_google_lens
+    # --- Import Gemini Functions ---
+    try:
+        from gemini_vision import (
+            initialize_gemini_client,
+            call_gemini_api,
+            parse_gemini_response,
+        )
+
+        gemini_available = True
+        print("Successfully imported Gemini vision functions.")
+    except ImportError as gemini_e:
+        print(f"Warning: Failed to import Gemini vision functions: {gemini_e}")
+        print("The /generate-gemini endpoint will not be available.")
+        initialize_gemini_client = None
+        call_gemini_api = None
+        parse_gemini_response = None
+        gemini_available = False
+    # --- End Import Gemini Functions ---
 
 except ImportError as e:
-    # print(f"Error importing FitDiT or Zyla components: {e}") # Adjusted error message
     print(f"Error importing FitDiT components: {e}")
     # Set components to None so initialization check fails gracefully
     Parsing = None
@@ -83,7 +93,7 @@ except ImportError as e:
     SD3Transformer2DModel_Garm = None
     SD3Transformer2DModel_Vton = None
     CLIPVisionModelWithProjection = None
-    # search_google_lens = None # No longer needed
+    gemini_available = False
 
 
 # Define static folder path and ensure it exists
@@ -96,10 +106,10 @@ CORS(app)
 # --- Global Storage for Preprocessed Data ---
 preprocessed_data = {
     "vton_img": None,  # PIL Image
-    "Upper-body": {"mask": None, "pose": None},  # PIL Images
+    "Upper-body": {"mask": None, "pose": None},
     "Lower-body": {"mask": None, "pose": None},
     "Dresses": {"mask": None, "pose": None},
-    "lock": threading.Lock(),  # To protect updates/reads
+    "lock": threading.Lock(),
 }
 
 # --- Helper Image Functions (copied from gradio_sd3.py) ---
@@ -189,7 +199,7 @@ def unpad_and_resize(padded_im, pad_w, pad_h, original_width, original_height):
     return resized_im
 
 
-# --- FitDiTGenerator Class (copied/adapted from gradio_sd3.py) ---
+# --- FitDiTGenerator Class ---
 class FitDiTGenerator:
     def __init__(
         self,
@@ -294,7 +304,7 @@ class FitDiTGenerator:
         print("Preprocessors loaded.")
 
         # --- Load Segmentation Models ---
-        segmentation_model_device = self.device  # Or choose 'cpu' if needed
+        segmentation_model_device = self.device
         print(f"  Loading YOLO model to {segmentation_model_device}...")
         try:
             # Using yolov8n (nano) for potentially faster inference
@@ -303,7 +313,9 @@ class FitDiTGenerator:
             # self.yolo_model.to(segmentation_model_device) # YOLO handles this
             print("  YOLO model loaded.")
         except Exception as e:
-            print(f"Error loading YOLO model: {e}. Segmentation will be skipped.")
+            print(
+                f"Error loading YOLO model: {e}. Original /generate endpoint segmentation might fail."
+            )
             self.yolo_model = None
 
         print(f"  Loading FastSAM model to {segmentation_model_device}...")
@@ -314,9 +326,31 @@ class FitDiTGenerator:
             # self.sam_model.to(segmentation_model_device) # FastSAM handles this
             print("  FastSAM model loaded.")
         except Exception as e:
-            print(f"Error loading FastSAM model: {e}. Segmentation will be skipped.")
+            print(
+                f"Error loading FastSAM model: {e}. Segmentation will be skipped in both endpoints."
+            )
             self.sam_model = None
         # --- End Load Segmentation Models ---
+
+        # --- Initialize Gemini Client ---
+        self.gemini_client = None
+        self.gemini_model_name = GEMINI_MODEL_NAME
+        if gemini_available and initialize_gemini_client:
+            print("Initializing Gemini Client...")
+            self.gemini_client = initialize_gemini_client()
+            if self.gemini_client:
+                print(
+                    f"  Gemini client initialized for model {self.gemini_model_name}."
+                )
+            else:
+                print(
+                    "  Failed to initialize Gemini client. /generate-gemini endpoint will not work."
+                )
+        else:
+            print(
+                "Gemini functions not available, skipping Gemini client initialization."
+            )
+        # --- End Initialize Gemini Client ---
 
         # Setup offloading or move pipeline to device
         if offload:
@@ -327,10 +361,7 @@ class FitDiTGenerator:
             self.pipeline.enable_sequential_cpu_offload()
         else:
             print(f"Moving pipeline components to {self.device}...")
-            move_start = time.time()
             self.pipeline.to(self.device)
-            move_end = time.time()
-            print(f"  Pipeline moved to device in {move_end - move_start:.2f} seconds.")
 
     # --- Internal Preprocessing Logic ---
     def _preprocess_images(
@@ -515,14 +546,14 @@ class FitDiTGenerator:
 
             return result_img_pil
 
-    # --- New Segmentation Method ---
+    # --- Original Segmentation Method (using YOLO + FastSAM) ---
     def _segment_person(self, vton_img_pil: Image.Image) -> Image.Image:
-        """Segments the largest person from the input image and places them on a white background."""
+        """Segments the largest person using YOLO detection + FastSAM segmentation."""
         if not self.yolo_model or not self.sam_model:
             print("Warning: YOLO or FastSAM model not loaded. Skipping segmentation.")
             return vton_img_pil
 
-        print("Starting person segmentation...")
+        print("Starting person segmentation (YOLO + FastSAM)...")
         seg_start_time = time.time()
 
         try:
@@ -533,7 +564,6 @@ class FitDiTGenerator:
             # 2. Run YOLO detection
             print("  Running YOLO detection...")
             yolo_start = time.time()
-            # Use the device specified during initialization implicitly
             yolo_results = self.yolo_model(
                 vton_img_cv, device=self.device, verbose=False
             )
@@ -543,7 +573,6 @@ class FitDiTGenerator:
             # 3. Find the largest 'person' bounding box
             largest_person_box = None
             max_area = 0
-            person_boxes = []
             if yolo_results and len(yolo_results) > 0:
                 boxes = yolo_results[0].boxes
                 for box in boxes:
@@ -551,26 +580,23 @@ class FitDiTGenerator:
                     if cls == 0:  # Class 0 is 'person'
                         xyxy_box = box.xyxy[0].cpu().numpy()
                         x1, y1, x2, y2 = map(int, xyxy_box)
-                        # Basic sanity check for box size
                         if x2 > x1 and y2 > y1:
                             area = (x2 - x1) * (y2 - y1)
                             if area > max_area:
                                 max_area = area
                                 largest_person_box = [x1, y1, x2, y2]
-                                person_boxes.append(largest_person_box)
 
             if not largest_person_box:
                 print("  No persons detected by YOLO. Skipping segmentation.")
                 return vton_img_pil
 
-            print(f"  Found largest person box: {largest_person_box}")
+            print(f"  Found largest person box (YOLO): {largest_person_box}")
 
             # 4. Run FastSAM segmentation using BBox Prompt
-            print("  Running FastSAM segmentation...")
+            print("  Running FastSAM segmentation (prompted by YOLO box)...")
             sam_start = time.time()
-            # Use the device specified during initialization implicitly
             sam_results = self.sam_model(
-                vton_img_cv,  # Pass the OpenCV image
+                vton_img_cv,
                 device=self.device,
                 retina_masks=True,
                 conf=0.4,
@@ -588,39 +614,158 @@ class FitDiTGenerator:
                 and sam_results[0].masks is not None
             ):
                 print("  FastSAM processing successful. Applying mask...")
-                # Get the first mask (corresponding to the bbox prompt)
                 mask_data = sam_results[0].masks.data[0]
                 mask_np = mask_data.cpu().numpy().astype(np.uint8)
-
-                # Resize mask to original image size
                 mask_resized = cv2.resize(
                     mask_np, (w_orig, h_orig), interpolation=cv2.INTER_NEAREST
                 )
                 mask_bool = mask_resized.astype(bool)
-
-                # Create white background
                 white_bg = np.ones_like(vton_img_cv, dtype=np.uint8) * 255
-
-                # Combine using the mask (select from original where mask is True, else white)
                 segmented_img_cv = np.where(mask_bool[..., None], vton_img_cv, white_bg)
-
-                # Convert result back to PIL (BGR -> RGB)
                 segmented_img_pil = Image.fromarray(
                     cv2.cvtColor(segmented_img_cv, cv2.COLOR_BGR2RGB)
                 )
                 seg_end_time = time.time()
                 print(
-                    f"Segmentation finished in {seg_end_time - seg_start_time:.2f} seconds."
+                    f"Segmentation (YOLO+FastSAM) finished in {seg_end_time - seg_start_time:.2f} seconds."
                 )
                 return segmented_img_pil
             else:
                 print(
-                    "  FastSAM did not produce results for the prompted bounding box. Skipping segmentation."
+                    "  FastSAM did not produce results for the prompted bounding box (YOLO). Skipping segmentation."
                 )
                 return vton_img_pil
 
         except Exception as e:
-            print(f"Error during segmentation: {traceback.format_exc()}")
+            print(f"Error during segmentation (YOLO+FastSAM): {traceback.format_exc()}")
+            print("  Segmentation failed. Returning original image.")
+            return vton_img_pil
+
+    # --- End Original Segmentation Method ---
+
+    # --- New Segmentation Method (using Gemini + FastSAM) ---
+    def _segment_person_gemini(self, vton_img_pil: Image.Image) -> Image.Image:
+        """Segments the largest person using Gemini detection + FastSAM segmentation."""
+        if not self.gemini_client or not self.sam_model:
+            print(
+                "Warning: Gemini client or FastSAM model not available. Skipping Gemini segmentation."
+            )
+            return vton_img_pil
+        if not call_gemini_api or not parse_gemini_response:
+            print(
+                "Warning: Gemini API/parsing functions not available. Skipping Gemini segmentation."
+            )
+            return vton_img_pil
+
+        print("Starting person segmentation (Gemini + FastSAM)...")
+        seg_start_time = time.time()
+
+        try:
+            # 1. Call Gemini API to detect persons
+            print("  Calling Gemini API for person detection...")
+            gemini_start = time.time()
+            width, height = vton_img_pil.size
+            try:
+                response_text = call_gemini_api(
+                    self.gemini_client, self.gemini_model_name, "person", vton_img_pil
+                )
+            except Exception as api_err:
+                print(f"  Gemini API call failed: {api_err}")
+                return vton_img_pil  # Return original on API error
+
+            gemini_end = time.time()
+            print(f"    Gemini API call time: {gemini_end - gemini_start:.2f}s")
+
+            # 2. Parse Gemini Response
+            print("  Parsing Gemini response...")
+            parse_start = time.time()
+            bounding_boxes = parse_gemini_response(response_text, width, height)
+            parse_end = time.time()
+            print(f"    Gemini parsing time: {parse_end - parse_start:.2f}s")
+
+            if not bounding_boxes:
+                print("  No persons detected by Gemini. Skipping segmentation.")
+                return vton_img_pil
+
+            # 3. Find the largest 'person' bounding box from Gemini results
+            largest_person_box = None
+            max_area = 0
+            for box_info in bounding_boxes:
+                # Expecting box_2d = [x1, y1, x2, y2] in pixel coords
+                x1, y1, x2, y2 = box_info["box_2d"]
+                area = (x2 - x1) * (y2 - y1)
+                if area > max_area:
+                    max_area = area
+                    largest_person_box = [x1, y1, x2, y2]  # Keep pixel coords
+
+            if not largest_person_box:
+                # This case should ideally not happen if bounding_boxes is not empty
+                print(
+                    "  Could not determine largest person box from Gemini results. Skipping segmentation."
+                )
+                return vton_img_pil
+
+            print(f"  Found largest person box (Gemini): {largest_person_box}")
+            # Optional: Draw Gemini box for debugging
+            # try:
+            #     debug_img = vton_img_pil.copy()
+            #     draw = ImageDraw.Draw(debug_img)
+            #     draw.rectangle(largest_person_box, outline="red", width=3)
+            #     debug_img.save("gemini_detected_box.png")
+            # except Exception as draw_err:
+            #     print(f"Could not draw debug box: {draw_err}")
+
+            # 4. Run FastSAM segmentation using the Gemini BBox Prompt
+            print("  Running FastSAM segmentation (prompted by Gemini box)...")
+            sam_start = time.time()
+            vton_img_cv = cv2.cvtColor(np.array(vton_img_pil), cv2.COLOR_RGB2BGR)
+            h_orig, w_orig = vton_img_cv.shape[:2]  # Get dimensions again just in case
+
+            sam_results = self.sam_model(
+                vton_img_cv,  # Use the OpenCV version for SAM
+                device=self.device,
+                retina_masks=True,
+                conf=0.4,
+                iou=0.9,
+                bboxes=[largest_person_box],  # Use the box found by Gemini
+                verbose=False,
+            )
+            sam_end = time.time()
+            print(f"    FastSAM segmentation time: {sam_end - sam_start:.2f}s")
+
+            # 5. Process FastSAM results and apply mask (same logic as before)
+            if (
+                sam_results
+                and len(sam_results) > 0
+                and sam_results[0].masks is not None
+            ):
+                print("  FastSAM processing successful. Applying mask...")
+                mask_data = sam_results[0].masks.data[0]
+                mask_np = mask_data.cpu().numpy().astype(np.uint8)
+                mask_resized = cv2.resize(
+                    mask_np, (w_orig, h_orig), interpolation=cv2.INTER_NEAREST
+                )
+                mask_bool = mask_resized.astype(bool)
+                white_bg = np.ones_like(vton_img_cv, dtype=np.uint8) * 255
+                segmented_img_cv = np.where(mask_bool[..., None], vton_img_cv, white_bg)
+                segmented_img_pil = Image.fromarray(
+                    cv2.cvtColor(segmented_img_cv, cv2.COLOR_BGR2RGB)
+                )
+                seg_end_time = time.time()
+                print(
+                    f"Segmentation (Gemini+FastSAM) finished in {seg_end_time - seg_start_time:.2f} seconds."
+                )
+                return segmented_img_pil
+            else:
+                print(
+                    "  FastSAM did not produce results for the prompted bounding box (Gemini). Skipping segmentation."
+                )
+                return vton_img_pil
+
+        except Exception as e:
+            print(
+                f"Error during segmentation (Gemini+FastSAM): {traceback.format_exc()}"
+            )
             print("  Segmentation failed. Returning original image.")
             return vton_img_pil
 
@@ -964,7 +1109,7 @@ def infer_tryon():
 @app.route("/generate", methods=["POST"])
 def generate_tryon():
     request_start_time = time.time()
-    print("--- New /generate Request (Combined Preprocess & Infer) ---")
+    print("--- New /generate Request (Combined Preprocess & Infer - YOLO/SAM) ---")
 
     if generator is None:
         return jsonify({"error": "Model generator not initialized."}), 503
@@ -989,7 +1134,7 @@ def generate_tryon():
         vton_img_pil_orig = decode_base64_to_pil(data["vton_img_base64"]).convert("RGB")
         garm_img_pil = decode_base64_to_pil(data["garm_img_base64"]).convert("RGB")
 
-        # --- Add Segmentation Step ---
+        # --- Use Original Segmentation Step (YOLO + FastSAM) ---
         vton_img_pil = generator._segment_person(vton_img_pil_orig)
         # --- End Segmentation Step ---
 
@@ -1080,21 +1225,205 @@ def generate_tryon():
 
         # --- Step 4: Composite result onto original background ---
         composite_start = time.time()
-        overlaid_img_base64 = None  # Initialize variable for composited image
+        overlaid_img_base64 = None
         try:
-            # Ensure images are RGB for NumPy processing
             result_np = np.array(result_img_pil.convert("RGB"))
             original_np = np.array(vton_img_pil_orig.convert("RGB"))
 
-            # Check dimensions match (should match due to unpad_and_resize)
             if result_np.shape != original_np.shape:
                 print(
-                    f"Warning: Dimension mismatch between result ({result_np.shape}) and original ({original_np.shape}). Skipping compositing."
+                    f"Warning: Dimension mismatch for compositing (YOLO). Result: {result_np.shape}, Original: {original_np.shape}. Skipping."
                 )
-                # Handle mismatch: perhaps return only the segmented result or an error/flag
-                original_img_base64 = None  # Indicate compositing failed or was skipped
+                original_img_base64 = None
             else:
-                # Mask becomes True for pixels that are NOT close to white
+                mask = np.any(result_np < 240, axis=-1)
+                composite_np = np.where(mask[..., np.newaxis], result_np, original_np)
+                composite_img_pil = Image.fromarray(composite_np.astype(np.uint8))
+                overlaid_img_base64 = encode_pil_to_base64(
+                    composite_img_pil, format="PNG"
+                )
+
+        except Exception as composite_exc:
+            print(f"Error during compositing (YOLO): {traceback.format_exc()}")
+            overlaid_img_base64 = None
+
+        composite_end = time.time()
+        print(
+            f"  Time - Compositing onto Original (YOLO): {composite_end - composite_start:.2f} seconds"
+        )
+        encode_end = time.time()
+        print(
+            f"  Time - Encoding Results (YOLO): {encode_end - encode_start:.2f} seconds"
+        )
+
+        request_end_time = time.time()
+        print(
+            f"Time - Total /generate Request (YOLO): {request_end_time - request_start_time:.2f} seconds"
+        )
+        print("--- /generate Request (YOLO) Completed ---")
+        response_data = {
+            "masked_img_base64": masked_img_base64,
+            "original_img_base64": original_vton_base64,
+        }
+        if overlaid_img_base64:
+            response_data["overlaid_img_base64"] = overlaid_img_base64
+        else:
+            response_data["compositing_status"] = "failed_or_skipped"
+
+        return jsonify(response_data)
+
+    except Exception as e:
+        print(f"Error during inference (YOLO): {traceback.format_exc()}")
+        request_end_time = time.time()
+        print(
+            f"Time - Total /generate Request (YOLO Error): {request_end_time - request_start_time:.2f} seconds"
+        )
+        print("--- /generate Request (YOLO) Failed ---")
+        return jsonify({"error": f"Internal server error during inference: {e}"}), 500
+
+
+# --- NEW /generate-gemini Endpoint (Gemini + FastSAM) ---
+@app.route("/generate-gemini", methods=["POST"])
+def generate_tryon_gemini():
+    request_start_time = time.time()
+    print(
+        "--- New /generate-gemini Request (Combined Preprocess & Infer - Gemini/SAM) ---"
+    )
+
+    if generator is None:
+        return jsonify({"error": "Model generator not initialized."}), 503
+    if not generator.gemini_client:
+        return (
+            jsonify({"error": "Gemini client not available or not initialized."}),
+            503,
+        )
+
+    if not request.is_json:
+        return jsonify({"error": "Request must be JSON"}), 400
+
+    data = request.get_json()
+    required_fields = ["vton_img_base64", "garm_img_base64", "category"]
+    for field in required_fields:
+        if field not in data:
+            return jsonify({"error": f"Missing '{field}' in JSON payload"}), 400
+
+    category = data["category"]
+    if category not in ["Upper-body", "Lower-body", "Dresses"]:
+        return jsonify({"error": "Invalid category."}), 400
+
+    try:
+        # Decode images (same as original endpoint)
+        vton_img_pil_orig = decode_base64_to_pil(data["vton_img_base64"]).convert("RGB")
+        garm_img_pil = decode_base64_to_pil(data["garm_img_base64"]).convert("RGB")
+
+        # --- Use NEW Segmentation Step (Gemini + FastSAM) ---
+        vton_img_pil = generator._segment_person_gemini(vton_img_pil_orig)
+        # --- End Segmentation Step ---
+
+        # Encode original VTON image (same as original endpoint)
+        original_vton_base64 = encode_pil_to_base64(vton_img_pil_orig, format="PNG")
+
+        # Read optional preprocessing offsets (same as original endpoint)
+        offset_top = int(data.get("offset_top", 0))
+        offset_bottom = int(data.get("offset_bottom", 0))
+        offset_left = int(data.get("offset_left", 0))
+        offset_right = int(data.get("offset_right", 0))
+
+        # Read inference parameters (same as original endpoint)
+        n_steps = int(data.get("n_steps", 20))
+        image_scale = float(data.get("image_scale", 2.0))
+        seed = int(data.get("seed", -1))
+        num_images_per_prompt = 1
+        resolution = data.get("resolution", "768x1024")
+        if resolution not in ["768x1024", "1152x1536", "1536x2048"]:
+            return jsonify({"error": "Invalid resolution."}), 400
+
+    except Exception as e:
+        print(
+            f"Error processing input or decoding base64 (Gemini): {traceback.format_exc()}"
+        )
+        return (
+            jsonify({"error": f"Bad request data or invalid base64 string: {e}"}),
+            400,
+        )
+
+    print(
+        f"Processing /generate-gemini request: category={category}, resolution={resolution}, seed={seed}"
+    )
+
+    # --- Step 1: Preprocessing (same as original endpoint) ---
+    # Note: Preprocessing uses the *segmented* vton_img_pil from above
+    preprocess_start_time = time.time()
+    try:
+        print(f"  Starting preprocessing for category: {category} (Gemini flow)")
+        mask_pil, pose_image_pil = generator._preprocess_images(
+            vton_img_pil,  # Uses the image segmented by Gemini+SAM
+            category,
+            offset_top,
+            offset_bottom,
+            offset_left,
+            offset_right,
+        )
+        preprocess_end_time = time.time()
+        if mask_pil is None or pose_image_pil is None:
+            print(f"  Preprocessing failed for category: {category} (Gemini flow)")
+            return (
+                jsonify({"error": f"Preprocessing failed for category '{category}'."}),
+                500,
+            )
+        print(
+            f"  Finished preprocessing (Gemini flow) in {preprocess_end_time - preprocess_start_time:.2f}s"
+        )
+    except Exception as e:
+        print(f"Error during preprocessing (Gemini flow): {traceback.format_exc()}")
+        return (
+            jsonify({"error": f"Internal server error during preprocessing: {e}"}),
+            500,
+        )
+
+    # --- Step 2: Inference (same as original endpoint) ---
+    inference_start_time = time.time()
+    try:
+        result_img_pil = generator._run_inference(
+            vton_img_pil,  # Uses the segmented image
+            garm_img_pil,
+            mask_pil,  # Generated from the segmented image
+            pose_image_pil,  # Generated from the segmented image
+            n_steps,
+            image_scale,
+            seed,
+            num_images_per_prompt,
+            resolution,
+        )
+        inference_end_time = time.time()
+        print(
+            f"  Time - Inference Step Total (Gemini flow): {inference_end_time - inference_start_time:.2f} seconds"
+        )
+
+        if result_img_pil is None:
+            return jsonify({"error": "Model failed to generate an image."}), 500
+
+        # --- Step 3: Encode result (same as original endpoint) ---
+        encode_start = time.time()
+        masked_img_base64 = encode_pil_to_base64(result_img_pil, format="PNG")
+
+        # --- Step 4: Composite result onto original background (same as original endpoint) ---
+        composite_start = time.time()
+        overlaid_img_base64 = None
+        try:
+            result_np = np.array(result_img_pil.convert("RGB"))
+            original_np = np.array(
+                vton_img_pil_orig.convert("RGB")
+            )  # Use the *original* unsegmented image
+
+            if result_np.shape != original_np.shape:
+                print(
+                    f"Warning: Dimension mismatch for compositing (Gemini). Result: {result_np.shape}, Original: {original_np.shape}. Skipping."
+                )
+                # Indicate compositing was skipped or failed
+                overlaid_img_base64 = None  # Keep it None
+            else:
+                # Mask becomes True for pixels that are NOT close to white (threshold 240)
                 mask = np.any(result_np < 240, axis=-1)
 
                 # Combine: where mask is True, use result; otherwise use original
@@ -1107,25 +1436,25 @@ def generate_tryon():
                 )
 
         except Exception as composite_exc:
-            print(f"Error during compositing: {traceback.format_exc()}")
-            overlaid_img_base64 = None  # Indicate compositing failed
+            print(f"Error during compositing (Gemini): {traceback.format_exc()}")
+            overlaid_img_base64 = None  # Indicate failure
 
         composite_end = time.time()
         print(
-            f"  Time - Compositing onto Original: {composite_end - composite_start:.2f} seconds"
+            f"  Time - Compositing onto Original (Gemini): {composite_end - composite_start:.2f} seconds"
         )
 
         encode_end = time.time()
         print(
-            f"  Time - Encoding Results to Base64: {encode_end - encode_start:.2f} seconds"
+            f"  Time - Encoding Results (Gemini): {encode_end - encode_start:.2f} seconds"
         )
 
         request_end_time = time.time()
         print(
-            f"Time - Total /generate Request: {request_end_time - request_start_time:.2f} seconds"
+            f"Time - Total /generate-gemini Request: {request_end_time - request_start_time:.2f} seconds"
         )
-        print("--- /generate Request Completed ---")
-        # Return all three images
+        print("--- /generate-gemini Request Completed ---")
+        # Return all three images (masked, original, overlaid)
         response_data = {
             "masked_img_base64": masked_img_base64,
             "original_img_base64": original_vton_base64,  # Add the original VTON
@@ -1133,23 +1462,22 @@ def generate_tryon():
         if overlaid_img_base64:
             response_data["overlaid_img_base64"] = overlaid_img_base64
         else:
-            response_data["compositing_status"] = (
-                "failed_or_skipped"  # Optional: signal issues
-            )
+            # Optionally signal issues
+            response_data["compositing_status"] = "failed_or_skipped"
 
         return jsonify(response_data)
 
     except Exception as e:
-        print(f"Error during inference: {traceback.format_exc()}")
+        print(f"Error during inference (Gemini flow): {traceback.format_exc()}")
         request_end_time = time.time()
         print(
-            f"Time - Total /generate Request (Error): {request_end_time - request_start_time:.2f} seconds"
+            f"Time - Total /generate-gemini Request (Error): {request_end_time - request_start_time:.2f} seconds"
         )
-        print("--- /generate Request Failed ---")
+        print("--- /generate-gemini Request Failed ---")
         return jsonify({"error": f"Internal server error during inference: {e}"}), 500
 
 
-# --- New Endpoint for Google Lens Search ---
+# --- /search-lens Endpoint --- (unchanged)
 @app.route("/search-lens", methods=["POST"])
 def search_lens_endpoint():
     print("--- New /search-lens Request ---")
@@ -1162,7 +1490,6 @@ def search_lens_endpoint():
     if "image_base64" not in data:
         return jsonify({"error": "Missing 'image_base64' in JSON payload"}), 400
 
-    # Check if API key was loaded successfully earlier
     if not zyla_api_key:
         return (
             jsonify(
@@ -1173,27 +1500,23 @@ def search_lens_endpoint():
             503,
         )
 
-    # Check if Public Base URL is configured
     if not public_base_url:
         return (
             jsonify({"error": "Server configuration error: PUBLIC_BASE_URL not set."}),
-            500,  # Internal Server Error seems appropriate for config issues
+            500,
         )
 
     image_base64 = data["image_base64"]
-    file_path = None  # Initialize file_path
+    file_path = None
 
     try:
-        # 1. Decode Base64 to PIL Image
         try:
-            # Remove potential data URI prefix (e.g., "data:image/png;base64,")
             if "," in image_base64:
                 header, encoded = image_base64.split(",", 1)
             else:
                 encoded = image_base64
             img_data = base64.b64decode(encoded)
             pil_image = Image.open(io.BytesIO(img_data))
-            # Ensure image has a standard format like PNG or JPEG for saving
             img_format = pil_image.format if pil_image.format else "PNG"
             img_format = img_format.lower()
             if img_format not in ["png", "jpeg", "jpg"]:
@@ -1206,7 +1529,6 @@ def search_lens_endpoint():
             print(f"Error decoding base64 or opening image: {e}")
             return jsonify({"error": "Invalid base64 string or image data"}), 400
 
-        # 2. Save image to static folder with a unique name
         filename = f"{uuid.uuid4().hex}.{img_format}"
         file_path = os.path.join(STATIC_FOLDER, filename)
         try:
@@ -1216,17 +1538,13 @@ def search_lens_endpoint():
             print(f"Error saving image file: {traceback.format_exc()}")
             return jsonify({"error": f"Failed to save temporary image: {e}"}), 500
 
-        # 3. Construct the public URL for the image
-        # Use url_for for robustness, requires _external=True for absolute URL
         try:
             public_url = f"{public_base_url.rstrip('/')}/static/{filename}"
-
             print(f"  Generated public URL: {public_url}")
         except Exception as e:
             print(f"Error generating public URL: {traceback.format_exc()}")
-            # Clean up saved file before returning error
             if file_path and os.path.exists(file_path):
-                try:  # Add try-except for cleanup robustness
+                try:
                     os.remove(file_path)
                 except OSError as remove_err:
                     print(
@@ -1234,14 +1552,12 @@ def search_lens_endpoint():
                     )
             return jsonify({"error": f"Failed to generate image URL: {e}"}), 500
 
-        # 4. Call the Zyla Google Lens API (now uses integrated function)
         print(f"  Calling search_google_lens with URL: {public_url}")
         api_call_start = time.time()
         lens_result = search_google_lens(public_url)
         api_call_end = time.time()
         print(f"  Time - Zyla API Call: {api_call_end - api_call_start:.2f} seconds")
 
-        # 5. Return the result from the API
         request_end_time = time.time()
         print(
             f"Time - Total /search-lens Request: {request_end_time - request_start_time:.2f} seconds"
@@ -1252,13 +1568,12 @@ def search_lens_endpoint():
             return jsonify(lens_result)
         else:
             print("--- /search-lens Request Failed (API returned None) ---")
-            # API function already prints errors, return a generic server error
             return (
                 jsonify(
                     {"error": "Google Lens API call failed or returned no result."}
                 ),
                 502,
-            )  # 502 Bad Gateway might be appropriate
+            )
 
     except Exception as e:
         print(f"Unexpected error in /search-lens: {traceback.format_exc()}")
@@ -1269,7 +1584,6 @@ def search_lens_endpoint():
         return jsonify({"error": f"Internal server error: {e}"}), 500
 
     finally:
-        # 6. Clean up: Delete the temporary image file
         if file_path and os.path.exists(file_path):
             try:
                 os.remove(file_path)
