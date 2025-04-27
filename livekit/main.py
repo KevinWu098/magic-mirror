@@ -29,20 +29,6 @@ class Assistant(Agent):
             When you are STOPPED, do not respond with too much text. just affirm and stop.
             """,
         )
-        
-    @function_tool()
-    async def lookup_weather(
-        self,
-        context: RunContext,
-        location: str,
-    ) -> dict[str, Any]:
-        """Look up weather information for a given location.
-        
-        Args:
-            location: The location to look up weather information for.
-        """
-
-        return {"weather": "sunny", "temperature_f": 70}
 
     @function_tool()
     async def generate_clothing(
@@ -152,6 +138,33 @@ class Assistant(Agent):
             return f'Tell the user the result of the try on generation: {response}. If error, please ask them to try again.'
         except Exception:
             raise ToolError("Unable to generate try on")
+
+    @function_tool()
+    async def handle_clothing_options(
+        self,
+        show: bool,
+        context: RunContext,
+    ) -> dict[str, Any]:
+        """Show or hide (handle) the user clothing options on the frontend
+        
+        Args:
+            show: Whether to show or hide the clothing options
+        """
+
+        try:
+            room = get_job_context().room
+            participant_identity = next(iter(room.remote_participants))
+            response = await room.local_participant.perform_rpc(
+                destination_identity=participant_identity,
+                method="showClothingOptions",
+                response_timeout=5.0,
+                payload=json.dumps({"show": show}),
+            )
+            
+            print(response)
+            return f'Tell the user the result of the clothing handling: {response}. If error, please ask them to try again.'
+        except Exception:
+            raise ToolError("Unable to handle clothing options")
 
 
 async def entrypoint(ctx: agents.JobContext):
