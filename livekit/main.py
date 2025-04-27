@@ -3,7 +3,7 @@ from typing import Any
 from dotenv import load_dotenv
 
 from livekit import agents
-from livekit.agents import AgentSession, Agent, RoomInputOptions, function_tool, RunContext, get_job_context, ToolError
+from livekit.agents import AgentSession, Agent, RoomInputOptions, RoomOutputOptions, function_tool, RunContext, get_job_context, ToolError
 from livekit.plugins import (
     openai,
     deepgram,
@@ -23,6 +23,8 @@ class Assistant(Agent):
             You are a helpful assistant that can answer questions and help with tasks.
 
             Your name is Magic Mirror. You may be referred to as the Magic Mirror, Mirror, Magic Mirror, or Magic.
+
+            Ignore requests not related to the Magic Mirror. Kindly deflect. Generally keep responses short and concise.
 
             When you are STOPPED, do not respond with too much text. just affirm and stop.
             """,
@@ -118,6 +120,10 @@ async def entrypoint(ctx: agents.JobContext):
         agent=Assistant(),
         room_input_options=RoomInputOptions(
             noise_cancellation=noise_cancellation.BVC(),
+        ),
+        room_output_options=RoomOutputOptions(
+            transcription_enabled=True,
+            audio_enabled=True,
         ),
     )
 
