@@ -1,5 +1,7 @@
 "server-only";
 
+// file for using google ai to find visual similarities (mostly products)
+
 import { z } from "zod";
 
 interface GoogleLensResponse {

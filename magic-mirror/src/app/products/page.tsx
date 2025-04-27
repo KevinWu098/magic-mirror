@@ -56,7 +56,7 @@ export default function ProductsPage() {
       <h1 className="mb-8 text-2xl font-bold">Similar Products</h1>
       
       <div className="flex flex-row gap-4 justify-center">
-        {visual_matches.filter(e => e.price && e.availability === "In stock").map((product) => (
+        {visual_matches.filter(e => e.price && e.availability === "In stock").slice(0, 3).map((product) => (
           <ProductBubble
             key={product.link}
             imageUrl={product.image} // or use thumbnail
