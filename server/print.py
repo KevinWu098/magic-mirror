@@ -5,6 +5,7 @@ import tempfile
 from PIL import Image
 import io
 import datetime
+import subprocess
 
 # Create templates directory if it doesn't exist
 os.makedirs('templates', exist_ok=True)
@@ -50,15 +51,26 @@ def print_image():
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"saved_images/image_{timestamp}.jpg"
         
+        # Get absolute path for the file
+        abs_filepath = os.path.abspath(filename)
+        
         # Save the image with high quality
         image.save(filename, format='JPEG', quality=95)
         
         # Log to console
         print(f"Image saved to: {filename}")
         
+        # Open the image in the default viewer (non-blocking)
+        try:
+            # Use os.startfile which is available on Windows
+            os.startfile(abs_filepath)
+            print(f"Opened image in default viewer")
+        except Exception as viewer_error:
+            print(f"Warning: Could not open image in viewer: {str(viewer_error)}")
+        
         return jsonify({
             'success': True,
-            'message': 'Image saved to file',
+            'message': 'Image saved to file and opened in viewer',
             'filepath': filename
         })
     
