@@ -187,6 +187,33 @@ class Assistant(Agent):
             raise ToolError("Unable to handle clothing options")
 
     @function_tool()
+    async def handle_search_options(
+        self,
+        show: bool,
+        context: RunContext,
+    ) -> dict[str, Any]:
+        """Show or hide (handle) the displayed search options on the frontend
+        
+        Args:
+            show: Whether to show or hide the search options
+        """
+
+        try:
+            room = get_job_context().room
+            participant_identity = next(iter(room.remote_participants))
+            response = await room.local_participant.perform_rpc(
+                destination_identity=participant_identity,
+                method="showSearchOptions",
+                response_timeout=5.0,
+                payload=json.dumps({"show": show}),
+            )
+            
+            print(response)
+            return f'Tell the user the result of the search handling: {response}. If error, please ask them to try again.'
+        except Exception:
+            raise ToolError("Unable to handle search options")
+
+    @function_tool()
     async def find_similar_clothing(
         self,
         context: RunContext,
@@ -203,6 +230,10 @@ class Assistant(Agent):
         try:
             room = get_job_context().room
             participant_identity = next(iter(room.remote_participants))
+            
+            global session
+            await session.say("Searching the web for similar clothing...")
+            
             response = await room.local_participant.perform_rpc(
                 destination_identity=participant_identity,
                 method="findSimilarClothing",

@@ -116,9 +116,11 @@ export function Client() {
     const [showGeneratedModal, setShowGeneratedModal] = useState(false);
 
     const [isMuted, setIsMuted] = useState(false);
+    const [isVideoLoaded, setIsVideoLoaded] = useState(false);
+
     const [showClothingOptionsView, setShowClothingOptionsView] =
         useState(false);
-    const [isVideoLoaded, setIsVideoLoaded] = useState(false);
+    const [showSearchOptionsView, setShowSearchOptionsView] = useState(false);
 
     // New state for captions
     const [messages, setMessages] = useState<Message[]>([]);
@@ -144,8 +146,6 @@ export function Client() {
     const [similarClothingItems, setSimilarClothingItems] = useState<
         SimilarClothingItem[]
     >([]);
-    const [showSimilarClothingView, setShowSimilarClothingView] =
-        useState(false);
 
     const toggleMute = async () => {
         const newMuteState = !isMuted;
@@ -323,7 +323,20 @@ export function Client() {
             async (data: RpcInvocationData) => {
                 const payload = JSON.parse(data.payload);
 
+                setShowSearchOptionsView(false);
                 setShowClothingOptionsView(payload.show);
+
+                return "SUCCESS";
+            }
+        );
+
+        localParticipant.registerRpcMethod(
+            "showSearchOptions",
+            async (data: RpcInvocationData) => {
+                const payload = JSON.parse(data.payload);
+
+                setShowClothingOptionsView(false);
+                setShowSearchOptionsView(payload.show);
 
                 return "SUCCESS";
             }
@@ -334,6 +347,8 @@ export function Client() {
             async (data: RpcInvocationData) => {
                 console.log("GARMENT", garment);
 
+                setLoading(true);
+
                 const garmentToUse =
                     garment ||
                     new File(
@@ -343,6 +358,8 @@ export function Client() {
                             type: "image/jpeg",
                         }
                     );
+
+                console.log("garmenttouse", garmentToUse);
 
                 const result: SimilarClothingResult =
                     await findSimilarClothing(garmentToUse);
@@ -365,8 +382,12 @@ export function Client() {
                         websiteIcon: product.source_icon,
                     }));
 
+                console.log(transformedProducts);
+
                 setSimilarClothingItems(transformedProducts);
-                setShowSimilarClothingView(true);
+                setShowSearchOptionsView(true);
+
+                setLoading(false);
 
                 return "SUCCESS";
             }
@@ -541,6 +562,7 @@ export function Client() {
     };
 
     console.log(garment);
+    console.log(showSearchOptionsView);
 
     return (
         <div
@@ -661,7 +683,7 @@ export function Client() {
                     />
 
                     {showClothingOptionsView && <MotionImage images={images} />}
-                    {showSimilarClothingView && (
+                    {showSearchOptionsView && (
                         <div className="absolute bottom-32 grid w-full grid-cols-3 gap-8 px-40">
                             {similarClothingItems.map((item, index) => (
                                 <motion.div
